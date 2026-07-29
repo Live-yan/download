@@ -56,3 +56,4 @@ CVE-2026-22005
 CVE-2024-6387
 CVE-2024-39894
 CVE-2023-51384
+# retry: fixed compact JSON output for GitHub Actions matrix
