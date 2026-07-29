@@ -1,0 +1,189 @@
+name: 通用下载并发布 Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 下载类型
+        required: true
+        default: docker
+        type: choice
+        options:
+          - docker
+          - url
+      source:
+        description: Docker 镜像名或完整下载 URL
+        required: true
+        default: mysql:8.0.46
+        type: string
+      platform:
+        description: Docker 目标平台；URL 模式会忽略
+        required: true
+        default: linux/arm64/v8
+        type: string
+      output_name:
+        description: 输出文件名；留空则自动生成
+        required: false
+        default: mysql-8.0.46-arm64.tar
+        type: string
+      compression:
+        description: 主文件压缩方式
+        required: true
+        default: gzip
+        type: choice
+        options:
+          - none
+          - gzip
+          - zip
+      release_tag:
+        description: Release 标签；留空则自动生成
+        required: false
+        default: ""
+        type: string
+      release_title:
+        description: Release 标题；留空则自动生成
+        required: false
+        default: ""
+        type: string
+      publish_release:
+        description: 是否发布到 Releases
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: universal-download-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  download:
+    name: 下载、校验并发布
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 显示任务参数
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "模式：${{ inputs.mode }}"
+          echo "来源：${{ inputs.source }}"
+          echo "平台：${{ inputs.platform }}"
+          echo "输出名：${{ inputs.output_name }}"
+          echo "压缩：${{ inputs.compression }}"
+
+      - name: 下载并生成校验文件
+        shell: bash
+        env:
+          MODE: ${{ inputs.mode }}
+          SOURCE: ${{ inputs.source }}
+          PLATFORM: ${{ inputs.platform }}
+          OUTPUT_NAME: ${{ inputs.output_name }}
+          COMPRESSION: ${{ inputs.compression }}
+          DIST_DIR: dist
+        run: |
+          set -euo pipefail
+          chmod +x scripts/universal-download.sh
+          scripts/universal-download.sh
+
+      - name: 准备发布信息
+        id: release
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.release_tag }}
+          INPUT_TITLE: ${{ inputs.release_title }}
+          MODE: ${{ inputs.mode }}
+          SOURCE: ${{ inputs.source }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="download-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          fi
+
+          if [[ -n "$INPUT_TITLE" ]]; then
+            title="$INPUT_TITLE"
+          else
+            title="通用下载：${SOURCE}"
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "title=$title"
+          } >> "$GITHUB_OUTPUT"
+
+          cat > release-notes.md <<EOF
+          ## 下载信息
+
+          - 类型：\`$MODE\`
+          - 来源：\`$SOURCE\`
+          - 目标平台：\`$PLATFORM\`
+          - 工作流运行：\`${GITHUB_RUN_ID}\`
+          - 提交：\`${GITHUB_SHA}\`
+          - 生成时间：\`$(date -u '+%Y-%m-%dT%H:%M:%SZ')\`
+
+          下载后请使用 Release 中的 \`SHA256SUMS\` 校验文件完整性。
+          EOF
+
+      - name: 上传 Actions 临时产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: universal-download-${{ github.run_id }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+      - name: 创建或更新 Release
+        if: ${{ inputs.publish_release == true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_TITLE: ${{ steps.release.outputs.title }}
+        run: |
+          set -euo pipefail
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG 已存在，覆盖同名文件。"
+            gh release upload "$RELEASE_TAG" dist/* --clobber
+          else
+            gh release create "$RELEASE_TAG" \
+              dist/* \
+              --target "$GITHUB_SHA" \
+              --title "$RELEASE_TITLE" \
+              --notes-file release-notes.md
+          fi
+
+          echo "Release 已发布：$RELEASE_TAG"
+
+      - name: 输出结果摘要
+        if: always()
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          {
+            echo "## 通用下载结果"
+            echo
+            echo "- 模式：\`${{ inputs.mode }}\`"
+            echo "- 来源：\`${{ inputs.source }}\`"
+            echo "- 平台：\`${{ inputs.platform }}\`"
+            echo "- Release 标签：\`${RELEASE_TAG:-未发布}\`"
+            echo
+            echo "### 文件"
+            if [[ -d dist ]]; then
+              find dist -maxdepth 1 -type f -printf '- `%f` (%s bytes)\n' | sort
+            else
+              echo "未生成 dist 目录。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
