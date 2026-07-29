@@ -1,0 +1,10 @@
+{
+  "mode": "docker",
+  "source": "mysql:8.0.46",
+  "platform": "linux/arm64/v8",
+  "output_name": "mysql-8.0.46-arm64.tar",
+  "compression": "gzip",
+  "release_tag": "mysql-8.0.46-arm64",
+  "release_title": "MySQL 8.0.46 ARM64 离线镜像",
+  "publish_release": true
+}
