@@ -1,0 +1,20 @@
+name: PP-OCR Android runner diagnostic
+on:
+  push:
+    branches: [build/ppocr-v6-tiny-android-20260918]
+    paths: ['.github/workflows/ppocr-runner-probe.yml']
+permissions:
+  contents: read
+  checks: read
+jobs:
+  runner-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check runner and previous failure annotation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo 'Runner started successfully'
+          java -version
+          gh api repos/Live-yan/download/check-runs/105486479619/annotations --jq '.[] | {message: .message, title: .title, annotation_level: .annotation_level}'
