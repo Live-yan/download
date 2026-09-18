@@ -1,85 +1,139 @@
 name: PP-OCRv6 tiny Android APK and SDK
+run-name: PP-OCRv6 tiny - install environment and build (${{ github.run_number }})
 on:
   push:
     branches: [build/ppocr-v6-tiny-android-20260918]
     paths: ['ppocr_android/**', '.github/workflows/ppocr-v6-tiny-android.yml']
   workflow_dispatch:
+    inputs:
+      run_emulator_tests:
+        description: Run actual OCR inference and APK startup tests on Android 15
+        type: boolean
+        default: true
 permissions:
   contents: read
 concurrency:
   group: ppocr-tiny-${{ github.ref }}
   cancel-in-progress: true
+env:
+  UPSTREAM: dab3fe35379033fdcb2d0e9572fac0b36c9a9ebf
+  PROJECT: upstream/deploy/ppocr-android
 jobs:
   build-and-test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      ANDROID_HOME: ${{ runner.temp }}/ppocr-android-sdk
+      ANDROID_SDK_ROOT: ${{ runner.temp }}/ppocr-android-sdk
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout build scripts
         uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Set up JDK 17
+      - name: Install Linux build utilities
+        run: |
+          set -euo pipefail
+          mkdir -p ci-logs
+          sudo apt-get update 2>&1 | tee ci-logs/apt-update.log
+          sudo apt-get install -y --no-install-recommends ca-certificates curl git unzip zip python3 2>&1 | tee ci-logs/apt-install.log
+      - name: Install Temurin JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - name: Set up Gradle 8.9
+      - name: Install Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - name: Fetch pinned official Android sources
-        env:
-          UPSTREAM: dab3fe35379033fdcb2d0e9572fac0b36c9a9ebf
+      - name: Install Android command-line tools and SDK 35 from scratch
+        uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '12266719'
+          accept-android-sdk-licenses: 'true'
+          log-accepted-android-sdk-licenses: 'false'
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+      - name: Verify installed build environment
         run: |
-          git init upstream
-          git -C upstream remote add origin https://github.com/PaddlePaddle/PaddleOCR.git
-          git -C upstream config core.sparseCheckout true
-          printf '/deploy/ppocr-android/\n/LICENSE\n' > upstream/.git/info/sparse-checkout
-          git -C upstream fetch --depth 1 origin "$UPSTREAM"
-          git -C upstream checkout --detach FETCH_HEAD
-          test "$(git -C upstream rev-parse HEAD)" = "$UPSTREAM"
-          python3 -m py_compile ppocr_android/prepare.py ppocr_android/finish_prepare.py
-          python3 ppocr_android/prepare.py upstream
-          python3 ppocr_android/finish_prepare.py upstream
-          cp ppocr_android/README.md upstream/deploy/ppocr-android/README-DELIVERY.md
-          cp -r ppocr_android upstream/deploy/ppocr-android/build-recipe
-      - name: Install Android SDK components
+          set -euo pipefail
+          {
+            uname -a
+            java -version
+            gradle --version
+            python3 --version
+            sdkmanager --version
+            sdkmanager --list_installed
+            adb version
+            test -s "$ANDROID_HOME/platforms/android-35/android.jar"
+            test -x "$ANDROID_HOME/build-tools/35.0.0/aapt"
+            test -x "$ANDROID_HOME/build-tools/35.0.0/apksigner"
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" version
+            df -h . "$ANDROID_HOME"
+          } 2>&1 | tee ci-logs/environment.log
+      - name: Fetch pinned official Android sources and prepare tiny models
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
-          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > upstream/deploy/ppocr-android/local.properties
-      - name: Build release APKs and model-inclusive SDK
+          set -euo pipefail
+          {
+            git init upstream
+            git -C upstream remote add origin https://github.com/PaddlePaddle/PaddleOCR.git
+            git -C upstream config core.sparseCheckout true
+            printf '/deploy/ppocr-android/\n/LICENSE\n' > upstream/.git/info/sparse-checkout
+            git -C upstream fetch --depth 1 origin "$UPSTREAM"
+            git -C upstream checkout --detach FETCH_HEAD
+            test "$(git -C upstream rev-parse HEAD)" = "$UPSTREAM"
+            python3 -m py_compile ppocr_android/prepare.py ppocr_android/finish_prepare.py
+            python3 ppocr_android/prepare.py upstream
+            python3 ppocr_android/finish_prepare.py upstream
+            cp ppocr_android/README.md "$PROJECT/README-DELIVERY.md"
+            cp -r ppocr_android "$PROJECT/build-recipe"
+            printf 'sdk.dir=%s\n' "$ANDROID_HOME" > "$PROJECT/local.properties"
+          } 2>&1 | tee ci-logs/prepare.log
+      - name: Resolve dependencies and build signed release APKs and SDK AAR
         working-directory: upstream/deploy/ppocr-android
         run: |
-          set -o pipefail
+          set -euo pipefail
           mkdir -p dist/validation
-          gradle --no-daemon --stacktrace :ppocr-sdk:assembleRelease :ppocr-sdk:exportSdkDependencies :app:assembleRelease 2>&1 | tee dist/validation/build.log
-          gradle --no-daemon --stacktrace :sdk-check:assembleDebug :sdk-check:assembleDebugAndroidTest 2>&1 | tee dist/validation/aar-consumer-build.log
-      - name: Package and verify APKs
+          gradle --no-daemon --console=plain --stacktrace :ppocr-sdk:assembleRelease :ppocr-sdk:exportSdkDependencies :app:assembleRelease 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/build.log"
+          gradle --no-daemon --console=plain --stacktrace :sdk-check:assembleDebug :sdk-check:assembleDebugAndroidTest 2>&1 | tee "$GITHUB_WORKSPACE/ci-logs/aar-consumer-build.log"
+      - name: Package and verify actual binaries
+        id: package
         working-directory: upstream/deploy/ppocr-android
         run: |
           set -euo pipefail
           mkdir -p dist/apk dist/sdk
           for arch in arm64-v8a armeabi-v7a x86_64 universal; do
-            cp "app/build/outputs/apk/release/app-${arch}-release.apk" "dist/apk/ppocr-v6-tiny-${arch}.apk"
+            src="app/build/outputs/apk/release/app-${arch}-release.apk"
+            dst="dist/apk/ppocr-v6-tiny-${arch}.apk"
+            test -s "$src"
+            cp "$src" "$dst"
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$dst" > "dist/validation/certificate-${arch}.txt"
           done
           cp ppocr-sdk/build/outputs/aar/ppocr-sdk-release.aar dist/sdk/ppocr-v6-tiny-sdk.aar
           cp MODEL_PROVENANCE.json README-DELIVERY.md LICENSE dist/
           cp MODEL_PROVENANCE.json README-DELIVERY.md LICENSE dist/sdk/
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs dist/apk/ppocr-v6-tiny-arm64-v8a.apk > dist/APK_CERTIFICATE.txt
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/apk/ppocr-v6-tiny-universal.apk > dist/APK_MANIFEST.txt
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions dist/apk/ppocr-v6-tiny-universal.apk > dist/APK_PERMISSIONS.txt
-          if grep -Eq 'android.permission.(INTERNET|CAMERA|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES)' dist/APK_PERMISSIONS.txt; then
-            echo 'Unexpected broad permission in the APK'; cat dist/APK_PERMISSIONS.txt; exit 1
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging dist/apk/ppocr-v6-tiny-universal.apk > dist/validation/APK_MANIFEST.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump permissions dist/apk/ppocr-v6-tiny-universal.apk > dist/validation/APK_PERMISSIONS.txt
+          if grep -Eq 'android.permission.(INTERNET|CAMERA|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES)' dist/validation/APK_PERMISSIONS.txt; then
+            echo 'Unexpected broad permission in the APK'; cat dist/validation/APK_PERMISSIONS.txt; exit 1
           fi
-          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 dist/apk/ppocr-v6-tiny-arm64-v8a.apk > dist/ZIP_ALIGNMENT.txt
+          "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -P 16 -v 4 dist/apk/ppocr-v6-tiny-arm64-v8a.apk > dist/validation/ZIP_ALIGNMENT.txt
           python3 - <<'PY'
-          import json, struct, zipfile
+          import hashlib, json, os, struct, zipfile
           from pathlib import Path
+          dist = Path('dist')
+          models = ['assets/models/det/inference.onnx', 'assets/models/rec/inference.onnx', 'assets/models/rec/inference.yml']
+          for archive in [dist/'apk/ppocr-v6-tiny-universal.apk', dist/'sdk/ppocr-v6-tiny-sdk.aar']:
+              with zipfile.ZipFile(archive) as z:
+                  assert z.testzip() is None, archive
+                  for name in models:
+                      assert z.getinfo(name).file_size > 0, (archive, name)
           rows = []
-          with zipfile.ZipFile('dist/apk/ppocr-v6-tiny-universal.apk') as z:
+          with zipfile.ZipFile(dist/'apk/ppocr-v6-tiny-universal.apk') as z:
               for name in z.namelist():
-                  if not name.endswith('.so') or not any('/'+a+'/' in name for a in ['arm64-v8a','x86_64']): continue
+                  if not name.endswith('.so') or not any('/'+a+'/' in name for a in ['arm64-v8a','x86_64']):
+                      continue
                   data = z.read(name)
                   assert data[:4] == b'\x7fELF' and data[4] == 2, name
                   off = struct.unpack_from('<Q', data, 32)[0]
@@ -87,17 +141,45 @@ jobs:
                   aligns = []
                   for i in range(count):
                       fields = struct.unpack_from('<IIQQQQQQ', data, off+i*size)
-                      if fields[0] == 1: aligns.append(fields[7])
-                  rows.append({'path':name,'load_segment_alignments':aligns,'compatible_16kb_alignment':bool(aligns) and min(aligns)>=16384})
-          Path('dist/NATIVE_ALIGNMENT.json').write_text(json.dumps({'all_64bit_aligned':all(r['compatible_16kb_alignment'] for r in rows),'libraries':rows},indent=2))
-          print(Path('dist/NATIVE_ALIGNMENT.json').read_text())
+                      if fields[0] == 1:
+                          aligns.append(fields[7])
+                  rows.append({'path': name, 'load_segment_alignments': aligns, 'compatible_16kb_alignment': bool(aligns) and min(aligns) >= 16384})
+          assert rows, 'No 64-bit native libraries found'
+          (dist/'validation/NATIVE_ALIGNMENT.json').write_text(json.dumps({'all_64bit_aligned': all(r['compatible_16kb_alignment'] for r in rows), 'libraries': rows}, indent=2))
+          with zipfile.ZipFile(dist/'ppocr-v6-tiny-sdk-bundle.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for f in (dist/'sdk').rglob('*'):
+                  if f.is_file():
+                      z.write(f, f.relative_to(dist))
+          with zipfile.ZipFile(dist/'ppocr-v6-tiny-source.zip', 'w', zipfile.ZIP_DEFLATED) as z:
+              for f in Path('.').rglob('*'):
+                  if not f.is_file() or any(part in {'.git','.gradle','build','dist','.kotlin','__pycache__'} for part in f.parts):
+                      continue
+                  if f.name in {'local.properties','debug.keystore'}:
+                      continue
+                  z.write(f, Path('ppocr-android')/f)
+          (dist/'BUILD_INFO.json').write_text(json.dumps({'build_commit': os.environ['GITHUB_SHA'], 'run_id': os.environ['GITHUB_RUN_ID'], 'upstream_commit': os.environ['UPSTREAM'], 'java': 17, 'gradle': '8.9', 'compile_sdk': 35, 'build_tools': '35.0.0', 'signing': 'Android debug/test certificate; release build type', 'runtime_validation': 'See separate validation artifact from the same workflow run', 'physical_device_tested': False}, indent=2))
+          sums = [hashlib.sha256(f.read_bytes()).hexdigest()+'  '+str(f.relative_to(dist)) for f in sorted(dist.rglob('*')) if f.is_file() and f.name != 'SHA256SUMS.txt']
+          (dist/'SHA256SUMS.txt').write_text('\n'.join(sums)+'\n')
           PY
-      - name: Enable KVM
+      - name: Upload compiled APKs, SDK and source before emulator tests
+        uses: actions/upload-artifact@v4
+        with:
+          name: ppocr-v6-tiny-binaries-${{ github.run_number }}
+          path: upstream/deploy/ppocr-android/dist/
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 1
+      - name: Enable KVM for runtime tests
+        if: github.event_name != 'workflow_dispatch' || inputs.run_emulator_tests
         run: |
+          set -euo pipefail
+          test -e /dev/kvm
           echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
-      - name: Test actual release AAR and APK on Android 15
+      - name: Test release AAR inference and APK startup on Android 15
+        id: runtime
+        if: github.event_name != 'workflow_dispatch' || inputs.run_emulator_tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 35
@@ -108,7 +190,7 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back emulated -no-snapshot
           working-directory: upstream/deploy/ppocr-android
           script: |
-            gradle --no-daemon --stacktrace :sdk-check:connectedDebugAndroidTest
+            gradle --no-daemon --console=plain --stacktrace :sdk-check:connectedDebugAndroidTest
             adb install -r dist/apk/ppocr-v6-tiny-universal.apk
             adb shell am start -W -n com.liveyan.ppocr.tiny/com.paddle.ocr.demo.MainActivity
             sleep 10
@@ -118,41 +200,34 @@ jobs:
             grep -q '拍照识别' dist/validation/app-ui.xml
             adb exec-out screencap -p > dist/validation/app-startup.png
             adb logcat -d > dist/validation/device-logcat.txt
-      - name: Collect test reports and source bundle
+      - name: Record outcome and collect diagnostic logs
         if: always()
-        working-directory: upstream/deploy/ppocr-android
+        env:
+          PACKAGE_OUTCOME: ${{ steps.package.outcome }}
+          RUNTIME_OUTCOME: ${{ steps.runtime.outcome }}
+          JOB_STATUS: ${{ job.status }}
         run: |
-          mkdir -p dist/validation
-          cp -r sdk-check/build/outputs/androidTest-results dist/validation/ 2>/dev/null || true
-          cp -r sdk-check/build/reports/androidTests dist/validation/ 2>/dev/null || true
-          cp -r app/build/reports dist/validation/app-reports 2>/dev/null || true
+          mkdir -p ci-logs
           python3 - <<'PY'
+          import json, os
           from pathlib import Path
-          import hashlib, json, os, zipfile
-          p=Path('.')
-          dist=p/'dist'
-          if (dist/'sdk').exists():
-              with zipfile.ZipFile(dist/'ppocr-v6-tiny-sdk-bundle.zip','w',zipfile.ZIP_DEFLATED) as z:
-                  for f in (dist/'sdk').rglob('*'):
-                      if f.is_file(): z.write(f,f.relative_to(dist))
-          with zipfile.ZipFile(dist/'ppocr-v6-tiny-source.zip','w',zipfile.ZIP_DEFLATED) as z:
-              for f in p.rglob('*'):
-                  if not f.is_file(): continue
-                  if any(part in {'.git','.gradle','build','dist','.kotlin'} for part in f.parts): continue
-                  if f.name in {'local.properties','debug.keystore'}: continue
-                  z.write(f,Path('ppocr-android')/f)
-          (dist/'BUILD_INFO.json').write_text(json.dumps({'build_commit':os.environ.get('GITHUB_SHA'),'run_id':os.environ.get('GITHUB_RUN_ID'),'upstream_commit':'dab3fe35379033fdcb2d0e9572fac0b36c9a9ebf','signing':'Android debug/test certificate; release build type','physical_device_tested':False},indent=2))
-          rows=[]
-          for f in sorted(dist.rglob('*')):
-              if f.is_file() and f.name!='SHA256SUMS.txt': rows.append(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+str(f.relative_to(dist)))
-          (dist/'SHA256SUMS.txt').write_text('\n'.join(rows)+'\n')
+          info = {'job_status_at_collection': os.environ['JOB_STATUS'], 'binary_package_step': os.environ['PACKAGE_OUTCOME'], 'android_emulator_test_step': os.environ['RUNTIME_OUTCOME'], 'physical_device_tested': False}
+          Path('ci-logs/RESULT.json').write_text(json.dumps(info, indent=2))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write('## PP-OCRv6 tiny Android build\n\n')
+              f.write('Binary package step: **'+info['binary_package_step']+'**\n\n')
+              f.write('Android emulator tests: **'+info['android_emulator_test_step']+'**\n\n')
+              f.write('APK/AAR are available only when the binary package step succeeds. Test signing only; not a production signing key.\n')
           PY
-      - name: Upload APK, SDK, source and verification reports
+          cp -r "$PROJECT/sdk-check/build/outputs/androidTest-results" ci-logs/ 2>/dev/null || true
+          cp -r "$PROJECT/sdk-check/build/reports/androidTests" ci-logs/ 2>/dev/null || true
+          cp -r "$PROJECT/dist/validation" ci-logs/ 2>/dev/null || true
+          if command -v adb >/dev/null; then adb logcat -d > ci-logs/device-logcat.txt 2>&1 || true; fi
+      - name: Upload environment, build and runtime validation reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ppocr-v6-tiny-android-${{ github.run_number }}
-          path: upstream/deploy/ppocr-android/dist/
-          retention-days: 90
+          name: ppocr-v6-tiny-validation-${{ github.run_number }}
+          path: ci-logs/
+          retention-days: 30
           if-no-files-found: warn
-          compression-level: 1
