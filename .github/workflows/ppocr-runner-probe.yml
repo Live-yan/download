@@ -8,13 +8,19 @@ permissions:
   checks: read
 jobs:
   runner-check:
-    runs-on: ubuntu-latest
+    name: Probe ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-22.04, windows-2022, macos-15]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 3
     steps:
-      - name: Check runner and previous failure annotation
+      - name: Check runner startup and original failure annotation
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo 'Runner started successfully'
           java -version
-          gh api repos/Live-yan/download/check-runs/105486479619/annotations --jq '.[] | {message: .message, title: .title, annotation_level: .annotation_level}'
+          gh api repos/Live-yan/download/check-runs/105488715484/annotations --jq '.[] | {message: .message, title: .title, annotation_level: .annotation_level}'
