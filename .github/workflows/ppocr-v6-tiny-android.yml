@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      ANDROID_HOME: ${{ runner.temp }}/ppocr-android-sdk
-      ANDROID_SDK_ROOT: ${{ runner.temp }}/ppocr-android-sdk
+      ANDROID_HOME: /tmp/ppocr-android-sdk
+      ANDROID_SDK_ROOT: /tmp/ppocr-android-sdk
     defaults:
       run:
         shell: bash
@@ -222,7 +222,7 @@ jobs:
           cp -r "$PROJECT/sdk-check/build/outputs/androidTest-results" ci-logs/ 2>/dev/null || true
           cp -r "$PROJECT/sdk-check/build/reports/androidTests" ci-logs/ 2>/dev/null || true
           cp -r "$PROJECT/dist/validation" ci-logs/ 2>/dev/null || true
-          if command -v adb >/dev/null; then adb logcat -d > ci-logs/device-logcat.txt 2>&1 || true; fi
+          if command -v adb >/dev/null; then timeout 15s adb logcat -d > ci-logs/device-logcat.txt 2>&1 || true; fi
       - name: Upload environment, build and runtime validation reports
         if: always()
         uses: actions/upload-artifact@v4
