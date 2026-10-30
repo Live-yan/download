@@ -12,7 +12,10 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     passwd acl attr ca-certificates curl python3 perl perl-modules \
     libio-socket-ssl-perl libnet-ssleay-perl procps tini \
  && rm -rf /var/lib/apt/lists/* \
- && smbd -V | grep -Fx 'Version 4.22.11' \
+ && smbd -V | tee /tmp/samba-version \
+ && grep -Ex 'Version 4[.]22[.]11(-Debian)?' /tmp/samba-version \
+ && dpkg-query -W samba samba-common samba-common-bin samba-libs samba-vfs-modules smbclient \
+ && rm -f /var/lib/samba/private/secrets.tdb /var/lib/samba/private/passdb.tdb \
  && test -x /usr/bin/smbcontrol
 WORKDIR /tmp
 RUN curl -fsSL https://github.com/webmin/webmin/releases/download/${WEBMIN_VERSION}/webmin-${WEBMIN_VERSION}.tar.gz -o /tmp/webmin.tar.gz \
