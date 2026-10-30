@@ -3,7 +3,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG SAMBA_VERSION=4.22.11
 ARG WEBMIN_VERSION=2.670
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    acl attr ca-certificates curl gcc g++ make pkg-config python3 python3-dev \
+    acl attr ca-certificates curl gcc g++ make flex bison xsltproc docbook-xml docbook-xsl libparse-yapp-perl pkg-config python3 python3-dev \
     python3-dnspython python3-cryptography python3-markdown python3-requests \
     python3-setproctitle python3-ldb python3-tdb python3-talloc \
     libacl1-dev libarchive-dev libattr1-dev libavahi-client-dev libblkid-dev \
