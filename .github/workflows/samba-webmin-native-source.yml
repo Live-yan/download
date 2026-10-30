@@ -10,7 +10,7 @@ permissions:
   contents: read
 concurrency:
   group: samba-webmin-native-build
-  cancel-in-progress: false
+  cancel-in-progress: true
 jobs:
   source:
     runs-on: ubuntu-24.04-arm
@@ -61,7 +61,7 @@ jobs:
           set -euo pipefail
           docker run --rm --platform linux/arm64 -v "$PWD:/work" -w /work \
             cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe \
-            bash -ec 'bash samba-webmin/native/probe-prerequisites.sh && bash samba-webmin/native/build-samba.sh'
+            bash -ec 'bash samba-webmin/native/probe-prerequisites.sh && bash samba-webmin/native/build-webmin.sh && bash samba-webmin/native/build-samba.sh'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -70,5 +70,6 @@ jobs:
             evidence/
             native-evidence/
             native-rpmbuild/RPMS/
+            native-webmin-rpmbuild/RPMS/
           if-no-files-found: error
           retention-days: 7
