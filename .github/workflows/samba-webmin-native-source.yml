@@ -1,0 +1,47 @@
+name: Kylin ARM64 native build source gate
+on:
+  push:
+    branches: [build/samba-webmin-offline-20261030]
+    paths:
+      - .github/workflows/samba-webmin-native-source.yml
+      - samba-webmin/native/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - name: Inspect official candidate and record exact baseline
+        env:
+          IMAGE: cr.kylinos.cn/kylin/kylin-server-init:v10sp3-2403
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          echo "Source qualification only; NOT native install/systemd acceptance." > evidence/SCOPE.txt
+          docker manifest inspect "$IMAGE" > evidence/manifest.json
+          docker pull --platform linux/arm64 "$IMAGE"
+          test "$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/arm64
+          docker image inspect "$IMAGE" --format '{{json .RepoDigests}}' > evidence/digests.json
+          docker run --rm --network none --entrypoint /bin/sh "$IMAGE" -ec '
+            cat /etc/os-release
+            rpm -q glibc rpm systemd
+            test -s /etc/pki/rpm-gpg/RPM-GPG-KEY-kylin
+            cat /etc/pki/rpm-gpg/RPM-GPG-KEY-kylin
+          ' > evidence/baseline.txt
+          cat evidence/baseline.txt
+      - name: Check official target repository metadata
+        run: |
+          set -euo pipefail
+          for repo in base updates; do
+            curl --fail --show-error --location --retry 2 --max-time 120               "https://update.cs2c.com.cn/NS/V10/V10SP3-2403/os/adv/lic/$repo/aarch64/repodata/repomd.xml"               -o "evidence/$repo-repomd.xml"
+            test -s "evidence/$repo-repomd.xml"
+          done
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kylin-native-source-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 7
