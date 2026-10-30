@@ -112,6 +112,90 @@ def command_failure_metadata(result):
     }, sort_keys=True), flush=True)
 
 
+def samba_error_log_metadata():
+    """Bounded service errors only; never export raw logs or credential records."""
+    relevant = re.compile(
+        r"error|fail|fatal|panic|denied|cannot|can't|unable|"
+        r"not found|no such|not permitted|address already in use|"
+        r"exited|killed|signal|core.dump|status=|no sockets|"
+        r"invalid|unsupported|not supported|eof on stdin",
+        re.IGNORECASE
+    )
+    credential_record = re.compile(
+        r"(?:password|passwd|passphrase|authorization|cookie|"
+        r"nt.hash|lm.hash|ntlm.response|session.key)\s*[:=]|"
+        r"(?:^|\s)(?:root|fileshare|persistuser):[^:\s]*:",
+        re.IGNORECASE
+    )
+
+    def emit(source, raw, **metadata):
+        lines = []
+        omitted = 0
+        for line in raw.splitlines():
+            if not relevant.search(line):
+                continue
+            if credential_record.search(line):
+                omitted += 1
+                continue
+            # Redact before truncating, including the entire private fixture.
+            if PASSWORD:
+                line = line.replace(PASSWORD, "[REDACTED]")
+            line = re.sub(
+                r"\$[A-Za-z0-9]+\$[./A-Za-z0-9$=,+-]+",
+                "[CRYPT-REDACTED]", line
+            )
+            line = re.sub(r"\b[0-9a-fA-F]{32,}\b", "[HEX-REDACTED]", line)
+            line = re.sub(r"(?i)\b(?:basic|bearer)\s+\S+",
+                          "[AUTH-REDACTED]", line)
+            # No terminal escapes or other non-printing control bytes.
+            line = "".join(c for c in line if c.isprintable())
+            lines.append(line[:600])
+        print("SMB_DIAG " + json.dumps({
+            "kind": "bounded-service-errors", "source": source,
+            "credential_lines_omitted": omitted,
+            "matched_lines": len(lines), "lines": lines[-24:],
+            **metadata
+        }, sort_keys=True), flush=True)
+
+    try:
+        journal = subprocess.run(
+            ["journalctl", "--boot=0", "--unit=samba422.service",
+             "--lines=160", "--output=cat", "--no-pager"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", timeout=20
+        )
+        emit("journal-samba422", journal.stdout, rc=journal.returncode)
+    except Exception:
+        print('SMB_DIAG {"source":"journal-samba422","unavailable":true}', flush=True)
+
+    # Fixed product paths only; do not enumerate private/passdb files.
+    for name in ("log.smbd", "log.127.0.0.1", "log.localhost"):
+        path = Path("/var/lib/samba-4.22.11") / name
+        try:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                print("SMB_DIAG " + json.dumps({
+                    "source": name, "not_regular": True
+                }, sort_keys=True), flush=True)
+                continue
+            with path.open("rb") as stream:
+                stream.seek(max(0, info.st_size - 65536))
+                data = stream.read(65536)
+            # A partial leading line is not a complete diagnostic record.
+            if info.st_size > 65536:
+                data = data.split(b"\n", 1)[-1]
+            emit(name, data.decode("utf-8", "replace"),
+                 tail_bytes=len(data), file_bytes=info.st_size)
+        except FileNotFoundError:
+            print("SMB_DIAG " + json.dumps({
+                "source": name, "missing": True
+            }, sort_keys=True), flush=True)
+        except Exception:
+            print("SMB_DIAG " + json.dumps({
+                "source": name, "unavailable": True
+            }, sort_keys=True), flush=True)
+
+
 def samba_failure_metadata():
     def query(argv):
         return subprocess.run(
@@ -134,7 +218,8 @@ def samba_failure_metadata():
     service = query([
         "systemctl", "show", "samba422",
         "-p", "MainPID", "-p", "ActiveState",
-        "-p", "SubState", "-p", "Result", "-p", "NRestarts"
+        "-p", "SubState", "-p", "Result", "-p", "NRestarts",
+        "-p", "ExecMainCode", "-p", "ExecMainStatus", "-p", "ExecMainPID"
     ])
     properties = dict(
         line.split("=", 1)
@@ -154,6 +239,12 @@ def samba_failure_metadata():
             if properties.get("NRestarts", "").isdigit() else None
         ),
     }
+    for name in ("ExecMainCode", "ExecMainStatus", "ExecMainPID"):
+        value = properties.get(name, "")
+        record[name] = int(value) if value.isdigit() else None
+    for name in ("ActiveState", "SubState", "Result"):
+        value = properties.get(name, "")
+        record[name] = value if re.fullmatch(r"[a-z][a-z-]{0,39}", value) else None
     if pid.isdigit() and int(pid) > 1:
         try:
             context = Path("/proc/" + pid + "/attr/current").read_text().strip()
@@ -162,6 +253,58 @@ def samba_failure_metadata():
         except OSError:
             record["service_context_unavailable"] = True
     print("SMB_DIAG " + json.dumps(record, sort_keys=True), flush=True)
+    samba_error_log_metadata()
+
+    # Effective NSS guest and RPC directory: metadata only, no account records.
+    try:
+        import pwd
+        guest = query([
+            PREFIX + "/bin/testparm", "-s", "--section-name=global",
+            "--parameter-name=guest account", CONF
+        ])
+        account = guest.stdout.strip()
+        guest_record = {"kind": "guest-account", "query_rc": guest.returncode}
+        if guest.returncode == 0 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]{0,63}", account):
+            guest_record["name"] = account
+            try:
+                entry = pwd.getpwnam(account)
+                guest_record.update({"nss_found": True, "uid": entry.pw_uid,
+                                     "gid": entry.pw_gid})
+            except KeyError:
+                guest_record["nss_found"] = False
+        print("SMB_DIAG " + json.dumps(guest_record, sort_keys=True), flush=True)
+        rpc = query([
+            PREFIX + "/bin/testparm", "-s", "--section-name=global",
+            "--parameter-name=ncalrpc dir", CONF
+        ])
+        compiled = query([PREFIX + "/sbin/smbd", "-b"])
+        paths = {"effective": rpc.stdout.strip()} if rpc.returncode == 0 else {}
+        match = re.search(r"(?m)^\s*NCALRPCDIR:\s*(/\S+)\s*$", compiled.stdout)
+        if compiled.returncode == 0 and match:
+            paths["compiled"] = match.group(1)
+        for origin, directory in paths.items():
+            if not re.fullmatch(r"/[A-Za-z0-9_./-]{1,255}", directory):
+                continue
+            for suffix in ("", "/np"):
+                path = Path(directory + suffix)
+                row = {"kind": "rpc-directory", "origin": origin, "path": str(path)}
+                try:
+                    info = path.lstat()
+                    row.update({"mode": oct(stat.S_IMODE(info.st_mode)),
+                                "uid": info.st_uid, "gid": info.st_gid,
+                                "is_directory": stat.S_ISDIR(info.st_mode),
+                                "is_symlink": stat.S_ISLNK(info.st_mode)})
+                    context = os.getxattr(str(path), "security.selinux",
+                                          follow_symlinks=False).rstrip(b"\0").decode("ascii")
+                    if re.fullmatch(r"[A-Za-z0-9_:.,-]+", context):
+                        row["context"] = context
+                except FileNotFoundError:
+                    row["missing"] = True
+                except OSError as exc:
+                    row["errno"] = exc.errno
+                print("SMB_DIAG " + json.dumps(row, sort_keys=True), flush=True)
+    except Exception:
+        print('SMB_DIAG {"kind":"guest-rpc-metadata","unavailable":true}', flush=True)
 
 
 def wait_samba_socket_once():
