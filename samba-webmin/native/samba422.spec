@@ -4,7 +4,7 @@
 %global sstate /var/lib/samba-4.22.11
 Name: samba422-offline
 Version: 4.22.11
-Release: 1.ky10
+Release: 2.ky10
 Summary: Isolated Samba file server for Kylin V10 SP3 2403 ARM64
 License: GPLv3+
 URL: https://www.samba.org/
@@ -30,7 +30,7 @@ No service is automatically enabled or started.
  --with-privatelibdir=%{sprefix}/lib/private \
  --with-privatedir=%{sstate}/private --with-lockdir=%{sstate}/lock \
  --with-statedir=%{sstate}/state --with-cachedir=%{sstate}/cache \
- --with-piddir=/run/samba422 \
+ --with-piddir=/run/samba422 --with-sockets-dir=/run/samba422 \
  --bundled-libraries=talloc,tdb,tevent,ldb --private-libraries=ALL \
  --without-ad-dc --without-cluster-support --without-smb1-server
 make %{?_smp_mflags}

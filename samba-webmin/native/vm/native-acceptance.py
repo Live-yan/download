@@ -757,7 +757,38 @@ def setup_samba():
     run("fixture-data-label", ["chcon", "-R", "-t", "samba_share_t", str(SHARE)])
 
 
+
+def check_samba_runtime_directory():
+    """Verify product-managed runtime state; never create or repair directories."""
+    wait_samba_socket_once()
+    expected = "/run/samba422/ncalrpc"
+    effective = text("runtime-rpc-effective-path", sb(
+        "testparm", "-s", "--section-name=global",
+        "--parameter-name=ncalrpc dir", CONF
+    ))
+    check(effective == expected, "runtime-rpc-effective-path-isolated")
+    # smbd -b does not print NCALRPCDIR or SOCKET_DIR values.
+    # An explicit empty configuration exposes the compiled parameter default.
+    compiled_default = text("runtime-rpc-compiled-default", sb(
+        "testparm", "-s", "--section-name=global",
+        "--parameter-name=ncalrpc dir", "/dev/null"
+    ))
+    check(compiled_default == expected, "runtime-rpc-compiled-default-isolated")
+    for directory, mode in [
+        ("/run/samba422", 0o755),
+        (expected, 0o755),
+        (expected + "/np", 0o700),
+    ]:
+        mark("runtime-rpc-directory-metadata")
+        info = Path(directory).lstat()
+        check(stat.S_ISDIR(info.st_mode) and
+              stat.S_IMODE(info.st_mode) == mode and
+              info.st_uid == 0 and info.st_gid == 0,
+              "runtime-rpc-directory-owner-and-mode")
+
+
 def samba_test(create_ntacl=False):
+    check_samba_runtime_directory()
     check(text("samba-version", [PREFIX + "/sbin/smbd", "-V"]) ==
           "Version 4.22.11", "samba-exact-version")
     check(text("persistent-unix-uid", ["id", "-u", "persistuser"]) ==
@@ -837,6 +868,7 @@ def snapshot():
 
 
 def lifecycle():
+    global SAMBA_SOCKET_READY
     pairs = ([("samba422", "samba422")] if SAMBA else [])
     pairs += ([("webmin", "webmin-offline")] if WEBMIN else [])
     for bundle, unit in pairs:
@@ -855,8 +887,15 @@ def lifecycle():
                         break
                     time.sleep(1)
                 check(not active(unit), "management-stop-effective-" + unit)
+                if unit == "samba422":
+                    SAMBA_SOCKET_READY = False
+                    check(not os.path.lexists("/run/samba422"),
+                          "runtime-directory-removed-by-systemd-on-stop")
             else:
                 wait_active(unit)
+                if unit == "samba422":
+                    SAMBA_SOCKET_READY = False
+                    check_samba_runtime_directory()
 
 
 def write_state(value):
