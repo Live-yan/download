@@ -1,0 +1,12 @@
+[Unit]
+Description=Native offline application acceptance
+After=local-fs.target systemd-udev-trigger.service network.target samba422.service webmin-offline.service
+[Service]
+Type=oneshot
+Environment=PYTHONUTF8=1
+ExecStart=/usr/bin/python3 /usr/local/libexec/native-acceptance.py
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=1800
+[Install]
+WantedBy=multi-user.target

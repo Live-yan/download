@@ -11,7 +11,7 @@ Webmin 可独立运行；Samba 管理功能需要另安装配套 Samba 原生包
 sudo mkdir -p /opt/offline
 sudo tar -xzf webmin-kylin-v10sp3-arm64-offline.tar.gz -C /opt/offline
 cd /opt/offline/webmin
-sudo dnf --setopt=reposdir="$PWD" --disablerepo='*' --enablerepo='webmin-*' install webmin-offline iproute passwd shadow-utils acl attr
+sudo dnf --setopt=install_weak_deps=False --setopt=reposdir="$PWD" --disablerepo='*' --enablerepo='webmin-*' install webmin-offline iproute passwd shadow-utils acl attr
 sudo systemctl daemon-reload
 ```
 

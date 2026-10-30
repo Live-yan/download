@@ -27,7 +27,10 @@ for name in "${names[@]}"; do
  esac
  mapfile -t apps < <(find "$bundle/application" -maxdepth 1 -name '*.rpm')
  test "${#apps[@]}" -eq 1
- cmp "$original" "${apps[0]}"
+ python3 - "$original" "${apps[0]}" <<'PY'
+import filecmp,sys
+assert filecmp.cmp(sys.argv[1],sys.argv[2],shallow=False),"Application RPM differs from build output"
+PY
  identity=$(rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}' "$original")
  packages+=("$identity")
  rpm --root "$root" --import "$bundle/keys/RPM-GPG-KEY-kylin"
@@ -49,7 +52,7 @@ done
 dnf -y --installroot="$root" --releasever=V10 --setopt="reposdir=$repos" \
  --disablerepo='*' "${repoflags[@]}" --setopt=install_weak_deps=False \
  install "${packages[@]}" iproute passwd shadow-utils acl attr \
- | tee "$evidence/dnf-transaction.log"
+ 2>&1 | tee "$evidence/dnf-transaction.log"
 if grep -Ei 'scriptlet.*failed|Error in .*scriptlet' "$evidence/dnf-transaction.log"; then exit 1; fi
 rpm --root "$root" -qa --qf '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' | sort >"$evidence/installed-packages.txt"
 for name in "${names[@]}"; do

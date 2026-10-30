@@ -12,7 +12,7 @@
 sudo mkdir -p /opt/offline
 sudo tar -xzf samba-kylin-v10sp3-arm64-offline.tar.gz -C /opt/offline
 cd /opt/offline/samba422
-sudo dnf --setopt=reposdir="$PWD" --disablerepo='*' --enablerepo='samba422-*' install samba422-offline iproute passwd shadow-utils acl attr
+sudo dnf --setopt=install_weak_deps=False --setopt=reposdir="$PWD" --disablerepo='*' --enablerepo='samba422-*' install samba422-offline iproute passwd shadow-utils acl attr
 sudo systemctl daemon-reload
 ```
 
