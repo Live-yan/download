@@ -9,7 +9,11 @@ echo "617af07a890bea18a83dca5c9d7168de1ad4d5f3076d8a1df3475f123748dc21  $TOP/SOU
 cp /work/samba-webmin/native/{stage-webmin.py,webmin-offline.service} "$TOP/SOURCES/"
 cp /work/samba-webmin/native/webmin-offline.spec "$TOP/SPECS/"
 rpmbuild --define "_topdir $TOP" -ba "$TOP/SPECS/webmin-offline.spec" 2>&1 | tee "$OUT/webmin-rpmbuild.log"
-RPM="$TOP/RPMS/noarch/webmin-offline-2.670-1.kylin.offline.noarch.rpm"
+mapfile -t results < <(find "$TOP/RPMS/noarch" -maxdepth 1 -name 'webmin-offline-2.670-*.noarch.rpm' -type f)
+test "${#results[@]}" -eq 1
+RPM="${results[0]}"
+test "$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}' "$RPM")" = 'webmin-offline 2.670 noarch'
+printf '%s\n' "$RPM" > "$OUT/webmin-rpm-path.txt"
 test -s "$RPM"
 rpm -qpR "$RPM" > "$OUT/webmin-requires.txt"
 rpm -qp --scripts "$RPM" > "$OUT/webmin-scripts.txt"

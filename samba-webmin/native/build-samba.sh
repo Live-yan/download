@@ -8,7 +8,11 @@ cp /work/samba-webmin/native/{samba422.service,smb.conf} "$TOP/SOURCES/"
 cp /work/samba-webmin/native/samba422.spec "$TOP/SPECS/"
 trap 'find "$TOP/BUILD" -name config.log -exec cp {} "$OUT/samba-config.log" \; 2>/dev/null || true' EXIT
 rpmbuild -ba --define "_topdir $TOP" --define "_smp_mflags -j2" "$TOP/SPECS/samba422.spec" 2>&1 | tee "$OUT/rpmbuild.log"
-RPM="$TOP/RPMS/aarch64/samba422-offline-4.22.11-1.ky10.aarch64.rpm"
+mapfile -t results < <(find "$TOP/RPMS/aarch64" -maxdepth 1 -name 'samba422-offline-4.22.11-*.aarch64.rpm' -type f)
+test "${#results[@]}" -eq 1
+RPM="${results[0]}"
+test "$(rpm -qp --qf '%{NAME} %{VERSION} %{ARCH}' "$RPM")" = 'samba422-offline 4.22.11 aarch64'
+printf '%s\n' "$RPM" > "$OUT/samba-rpm-path.txt"
 test -s "$RPM"
 rpm -qp --qf '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' "$RPM"
 rpm -qpR "$RPM" > "$OUT/samba-requires.txt"
