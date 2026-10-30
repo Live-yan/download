@@ -3,7 +3,12 @@ on:
   push:
     branches: [build/samba-webmin-offline-20261030]
     paths:
-      - samba-webmin/native/vm/**
+      - samba-webmin/native/vm/Dockerfile
+      - samba-webmin/native/vm/kylin.repo
+      - samba-webmin/native/vm/probe.sh
+      - samba-webmin/native/vm/probe.service
+      - samba-webmin/native/vm/label-image.py
+      - samba-webmin/native/vm/run-probe.sh
       - .github/workflows/samba-webmin-native-vm.yml
   workflow_dispatch:
 permissions:

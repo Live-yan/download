@@ -5,18 +5,26 @@ case_name=$1
 case "$case_name" in samba|webmin|combined) ;; *) exit 2;; esac
 command -v qemu-system-aarch64
 test -f samba-webmin/native/vm/native-acceptance.py
+python3 -m py_compile samba-webmin/native/vm/console-run.py samba-webmin/native/vm/finalize-rootfs.py samba-webmin/native/vm/native-acceptance.py
 docker build -t kylin-vm-probe samba-webmin/native/vm
 docker build -t kylin-native-acceptance -f samba-webmin/native/vm/Dockerfile.native .
 work="$PWD/vm-work/$case_name"
 logs="$PWD/vm-evidence/$case_name"
 test ! -e "$work"
 mkdir -p "$work" "$logs"
-cp samba-webmin/native/vm/label-image.py "$work/"
+cp samba-webmin/native/vm/label-image.py samba-webmin/native/vm/finalize-rootfs.py "$work/"
+python3 - "$work/login-secret" <<'PY'
+import os,secrets,sys
+fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+with os.fdopen(fd,"w") as stream:
+ stream.write(secrets.token_hex(32)+"\n")
+PY
 cid=""
 cleanup() {
  if [[ -n "$cid" ]]; then docker rm -f "$cid" >/dev/null 2>&1 || true; fi
+ if [ -f "$work/finalize-evidence.txt" ]; then cp "$work/finalize-evidence.txt" "$logs/finalize-evidence.txt" || true; fi
  docker run --rm --network none -v "$work:/work" --entrypoint /bin/bash \
-  kylin-native-acceptance -c 'rm -rf /work/rootfs /work/root.ext4 /work/rootfs.tar /work/labels' >/dev/null 2>&1 || true
+  kylin-native-acceptance -c 'rm -rf /work/rootfs /work/root.ext4 /work/rootfs.tar /work/labels /work/login-secret' >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 cid=$(docker create kylin-native-acceptance /bin/true)
@@ -42,6 +50,8 @@ docker run --rm --network none -e CASE_NAME="$case_name" \
  test ! -e /work/rootfs/var/lib/ci-native/state.json
  test ! -e /work/rootfs/opt/samba-4.22.11
  test ! -e /work/rootfs/usr/libexec/webmin
+ python3 /work/finalize-rootfs.py
+ chmod 0644 /work/finalize-evidence.txt
  truncate -s 8G /work/root.ext4
  mkfs.ext4 -F -L KYLINROOT -d /work/rootfs /work/root.ext4
  python3 /work/label-image.py
@@ -62,20 +72,16 @@ PY
 run_id="$(python3 -c 'import uuid; print(uuid.uuid4())')"
 printf 'case=%s\nrun=%s\nkernel=%s\n' "$case_name" "$run_id" "$(cat "$work/expected-kernel.txt")" >"$logs/metadata.txt"
 for phase in 1 2; do
- timeout --signal=TERM --kill-after=30s 35m qemu-system-aarch64 \
+ python3 samba-webmin/native/vm/console-run.py \
+  --secret "$work/login-secret" --log "$logs/phase-$phase.serial.log" \
+  --case "$case_name" --phase "$phase" --run "$run_id" --timeout 2100 -- \
+  qemu-system-aarch64 \
   -M virt,gic-version=3 -cpu max -accel tcg -m 4096 -smp 2 \
   -kernel "$work/Image" -initrd "$work/initramfs.img" \
   -append "console=ttyAMA0 root=/dev/vda rw rootfstype=ext4 security=selinux selinux=1 enforcing=1 ci.phase=$phase ci.run=$run_id" \
   -drive "if=none,id=root,file=$work/root.ext4,format=raw" -device virtio-blk-pci,drive=root \
   -object rng-random,filename=/dev/urandom,id=rng0 -device virtio-rng-pci,rng=rng0 \
-  -nic none -nographic -monitor none -no-reboot 2>&1 | tee "$logs/phase-$phase.serial.log"
- python3 - "$logs/phase-$phase.serial.log" "$case_name" "$phase" "$run_id" <<'PY'
-import pathlib,sys
-text=pathlib.Path(sys.argv[1]).read_text(errors="replace")
-expected="NATIVE_PASS case={} phase={} run={}".format(*sys.argv[2:])
-if expected not in text.splitlines(): raise SystemExit("Missing exact acceptance marker")
-if "NATIVE_FAIL" in text: raise SystemExit("Guest reported acceptance failure")
-if "Power down" not in text: raise SystemExit("No clean guest poweroff evidence")
-PY
+  -nic none -nographic -monitor none -no-reboot
+
 done
 printf 'Two cold boots passed: case=%s run=%s\n' "$case_name" "$run_id"

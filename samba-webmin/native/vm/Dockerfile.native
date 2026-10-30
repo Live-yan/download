@@ -1,7 +1,6 @@
 FROM kylin-vm-probe
 SHELL ["/bin/bash", "-euxo", "pipefail", "-c"]
 COPY samba-webmin/native/vm/native-acceptance.py /usr/local/libexec/native-acceptance.py
-COPY samba-webmin/native/vm/native-acceptance.service /etc/systemd/system/native-acceptance.service
 RUN rm -f /etc/systemd/system/multi-user.target.wants/kylin-vm-probe.service \
           /etc/systemd/system/kylin-vm-probe.service /usr/local/sbin/kylin-vm-probe; \
     test ! -e /opt/samba-4.22.11; test ! -e /usr/libexec/webmin; \
@@ -9,7 +8,6 @@ RUN rm -f /etc/systemd/system/multi-user.target.wants/kylin-vm-probe.service \
     command -v python3; command -v dnf; command -v rpm; \
     command -v getenforce; command -v chcon; \
     chmod 0755 /usr/local/libexec/native-acceptance.py; \
-    ln -s ../native-acceptance.service /etc/systemd/system/multi-user.target.wants/native-acceptance.service; \
     KVER="$(cat /etc/ci-expected-kernel)"; \
     if grep -qx CONFIG_HW_RANDOM_VIRTIO=m "/boot/config-$KVER"; then \
       dracut --force --no-hostonly --add selinux --add-drivers virtio_rng /boot/ci-initramfs.img "$KVER"; \

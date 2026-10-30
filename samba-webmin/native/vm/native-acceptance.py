@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -543,7 +544,7 @@ def snapshot():
             "/etc/webmin/miniserv.users", "/etc/webmin/samba/config"
         ]:
             result[path] = file_sha(path)
-        result["root_password_field_sha256"] = sha(root_password_field().encode())
+    result["root_password_field_sha256"] = sha(root_password_field().encode())
     return result
 
 
@@ -757,12 +758,84 @@ def selinux_diagnostics(when):
             })
 
 
+
+def read_console_fixture_password():
+    """Private disposable VM input, never an application default credential."""
+    path = Path("/etc/ci-root-password")
+    info = path.lstat()
+    check(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_gid == 0,
+          "private-console-secret-root-owned-regular-file")
+    check(stat.S_IMODE(info.st_mode) == 0o600, "private-console-secret-mode")
+    value = path.read_text(encoding="ascii").rstrip("\n")
+    check(re.fullmatch(r"[0-9a-f]{64}", value) is not None,
+          "private-console-secret-format")
+    return value
+
+
+def check_baseline_units(when):
+    """Report real official first-boot hook state; never mask/reset failures."""
+    units = [
+        "systemd-sysusers.service",
+        "ldconfig.service",
+        "systemd-hwdb-update.service",
+        "systemd-journal-catalog-update.service",
+        "systemd-update-done.service"
+    ]
+    failed = []
+    for unit in units:
+        properties = {}
+        query = None
+        for attempt in range(61):
+            query = run("baseline-query-" + unit, [
+                "systemctl", "show", unit,
+                "-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
+                "-p", "Result", "-p", "ConditionResult",
+                "-p", "ExecMainCode", "-p", "ExecMainStatus"
+            ], good=False)
+            properties = dict(
+                line.split("=", 1)
+                for line in query.stdout.splitlines() if "=" in line
+            )
+            if properties.get("ActiveState") not in ("activating", "deactivating"):
+                break
+            if attempt != 60:
+                time.sleep(1)
+        failure_query = run("baseline-failed-query-" + unit, [
+            "systemctl", "is-failed", "--quiet", unit
+        ], good=False)
+        bad = (
+            query.returncode != 0 or
+            properties.get("LoadState") != "loaded" or
+            properties.get("ActiveState") not in ("active", "inactive") or
+            properties.get("Result") != "success" or
+            failure_query.returncode != 1
+        )
+        print("BASELINE_UNIT " + json.dumps({
+            "when": when, "unit": unit, "properties": properties,
+            "is_failed_rc": failure_query.returncode, "blocked": bad
+        }, sort_keys=True), flush=True)
+        if bad:
+            failed.append(unit)
+    check(not failed, "baseline-official-hooks-must-not-fail")
+
+
 def main():
     global CASE, SAMBA, WEBMIN, BUNDLES, UNITS, PASSWORD
     check(sys.getfilesystemencoding().lower().replace("_", "-") == "utf-8",
           "python-utf8-filesystem-mode")
     CASE = Path("/etc/ci-case").read_text().strip()
     check(CASE in ("samba", "webmin", "combined"), "known-case")
+    check(os.getuid() == 0 and os.geteuid() == 0, "real-root-login-identity")
+    admin_context = Path("/proc/self/attr/current").read_text().strip().rstrip("\0")
+    fields = admin_context.split(":")
+    check(len(fields) >= 4 and fields[2] != "unconfined_service_t",
+          "administrator-login-not-generic-service-domain")
+    loginuid = Path("/proc/self/loginuid").read_text().strip()
+    print("LOGIN_CONTEXT " + json.dumps({
+        "uid": os.getuid(), "euid": os.geteuid(),
+        "loginuid": loginuid, "context": admin_context
+    }, sort_keys=True), flush=True)
+    PASSWORD = read_console_fixture_password()
     SAMBA = CASE in ("samba", "combined")
     WEBMIN = CASE in ("webmin", "combined")
     BUNDLES = (["samba422"] if SAMBA else []) + (["webmin"] if WEBMIN else [])
@@ -787,6 +860,7 @@ def main():
           "no-guest-network-interface")
     check(not Path("/.dockerenv").exists(), "not-container-execution")
     boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    check_baseline_units("boot-entry-phase-" + str(phase))
     try:
         selinux_diagnostics("baseline-before-application-install")
     except Exception as exc:
@@ -797,8 +871,7 @@ def main():
         check(set(p.name for p in Path("/opt/offline").iterdir()) == set(BUNDLES),
               "case-specific-bundles-only")
         PRIVATE.mkdir(mode=0o700)
-        # Blocking secrets API: never use weak/fixed entropy as a fallback.
-        PASSWORD = secrets.token_hex(32)
+        # PASSWORD is the same private, randomly seeded console fixture on both boots.
         for package in ["samba422-offline", "webmin-offline"]:
             check(run("application-absent", ["rpm", "-q", package],
                       good=False).returncode != 0, "pristine-no-application")
@@ -815,9 +888,8 @@ def main():
             check(run("rpm-enable-state", ["systemctl", "is-enabled", "--quiet", unit],
                       good=False).returncode != 0, "rpm-did-not-enable-" + unit)
 
-        # This is a private disposable VM test fixture, never product initialization.
-        if WEBMIN:
-            run("fixture-root-password", ["chpasswd"], "root:" + PASSWORD + "\n")
+        # The preinitialized private VM already has the console password.
+        # Installation and test execution must not reset it.
         if SAMBA:
             setup_samba()
         for unit in UNITS:
@@ -828,7 +900,7 @@ def main():
         saved = json.loads(STATE.read_text())
         check(saved["case"] == CASE and saved["run"] == nonce, "same-case-and-run")
         check(saved["boot_id"] != boot_id, "new-kernel-boot-id")
-        PASSWORD = saved["password"]
+        check(saved.get("password") == PASSWORD, "same-private-console-secret")
         candidates = saved["candidates"]
         # IMPORTANT: no install, start, enable, restart or account initialization.
         for unit in UNITS:
@@ -872,6 +944,7 @@ def main():
             "password": PASSWORD, "candidates": candidates, "snapshot": snapshot()
         })
 
+    check_baseline_units("boot-final-phase-" + str(phase))
     check(text("final-selinux-mode", ["getenforce"]) == "Enforcing",
           "selinux-remains-enforcing")
     for unit in UNITS:
