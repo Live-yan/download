@@ -1,0 +1,122 @@
+name: Samba Webmin Docker ARM64 verified release
+on:
+  push:
+    branches: [main, release/samba-webmin-docker-20261030]
+    paths:
+      - "samba-webmin/docker/**"
+      - "samba-webmin/tests/**"
+      - ".github/workflows/samba-webmin-docker-arm64.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: samba-webmin-docker-arm64
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Syntax gates
+        run: |
+          set -euo pipefail
+          sh -n samba-webmin/docker/entrypoint.sh
+          sh -n samba-webmin/docker/manage.sh
+          python3 -m py_compile samba-webmin/tests/runtime.py
+          SMB_BIND_IP=127.0.0.1 WEBMIN_HOST=localhost docker compose -f samba-webmin/docker/compose.yaml config >/dev/null
+      - uses: docker/setup-buildx-action@v3
+      - name: Build exact-version ARM64 runtime image
+        uses: docker/build-push-action@v6
+        with:
+          context: samba-webmin/docker
+          platforms: linux/arm64
+          load: true
+          push: false
+          tags: local/samba-webmin:4.22.11-webmin-2.670-arm64
+          cache-from: type=gha,scope=samba-webmin-arm64
+          cache-to: type=gha,mode=max,scope=samba-webmin-arm64
+      - name: Offline protocols, Webmin operations and persistence
+        run: python3 samba-webmin/tests/runtime.py
+      - name: Save remove reload and assemble exact five-file package
+        run: |
+          set -euo pipefail
+          image=local/samba-webmin:4.22.11-webmin-2.670-arm64
+          mkdir -p dist/package
+          before=$(docker image inspect "$image" --format '{{.Id}}')
+          docker save "$image" | gzip -9 > dist/package/webmin-samba-arm64.tar.gz
+          docker image rm "$image"
+          docker load -i dist/package/webmin-samba-arm64.tar.gz
+          test "$(docker image inspect "$image" --format '{{.Id}}')" = "$before"
+          cp samba-webmin/docker/README.md samba-webmin/docker/compose.yaml samba-webmin/docker/.env.example dist/package/
+          cp samba-webmin/docker/manage.sh dist/package/webmin-samba-manage.sh
+          chmod 0755 dist/package/webmin-samba-manage.sh
+          python3 - <<'PY'
+          from pathlib import Path
+          expected={"README.md","compose.yaml",".env.example","webmin-samba-arm64.tar.gz","webmin-samba-manage.sh"}
+          assert {p.name for p in Path("dist/package").iterdir()}==expected
+          PY
+          tar -czf dist/samba-webmin-arm64-docker-offline.tar.gz -C dist package
+          mkdir -p dist/unpacked
+          tar -xzf dist/samba-webmin-arm64-docker-offline.tar.gz -C dist/unpacked
+          diff -qr dist/package dist/unpacked/package
+      - name: Retest loaded image without internet
+        run: python3 samba-webmin/tests/runtime.py
+      - name: Test actual unpacked Compose and management script
+        run: python3 samba-webmin/tests/runtime.py dist/unpacked/package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: verified-docker-offline-package
+          path: dist/samba-webmin-arm64-docker-offline.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+  release:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: verify
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: verified-docker-offline-package
+          path: dist
+      - name: Publish unique tested Docker release and download-verify
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          current=$(gh api "repos/$GH_REPO/git/ref/heads/main" --jq .object.sha)
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            gh api "repos/$GH_REPO/compare/$GITHUB_SHA...$current" > changes.json
+            jq -e '(.status == "ahead" or .status == "identical") and ((.files | length) < 300)' changes.json >/dev/null
+            if jq -r '.files[] | .filename, (.previous_filename // empty)' changes.json | grep -Eq '^(samba-webmin/(docker|tests)/|[.]github/workflows/samba-webmin-docker-arm64[.]yml$)'; then
+              echo "Docker delivery inputs changed after this tested commit; do not publish"
+              exit 1
+            fi
+          fi
+          tag="samba-webmin-docker-arm64-$(printf '%s' "$GITHUB_SHA" | cut -c1-12)-$GITHUB_RUN_ID"
+          asset=dist/samba-webmin-arm64-docker-offline.tar.gz
+          cat > notes.md <<EOF
+          Samba 4.22.11 + Webmin 2.670，Debian 13 ARM64 Docker 完整离线包。
+          仅含 README、镜像、Compose、环境配置示例、三合一管理脚本五文件，无 SHA256 附件。
+          HTTP 后端仅回环发布，由用户现有 Nginx 处理外部 HTTPS。
+          原生 ARM64 GitHub runner 已通过离线协议、认证、Webmin 操作、持久化、save/load、解压 Compose 与启停脚本测试。
+          麒麟真机、实际 Nginx 及宿主开机流程未验收。此 Release 仅为 Docker 包；两个麒麟原生包尚未完成，不包含在此交付中。
+          Commit: $GITHUB_SHA
+          Actions: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          EOF
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release download "$tag" --pattern "$(basename "$asset")" --dir existing
+            cmp "$asset" "existing/$(basename "$asset")"
+          else
+            gh release create "$tag" "$asset" --target "$GITHUB_SHA" --title "Samba + Webmin ARM64 Docker offline $GITHUB_RUN_ID" --notes-file notes.md --latest=false
+          fi
+          gh release download "$tag" --pattern "$(basename "$asset")" --dir downloaded
+          cmp "$asset" "downloaded/$(basename "$asset")"
+          tar -tzf "downloaded/$(basename "$asset")"
+          gh release view "$tag" --json url,assets
