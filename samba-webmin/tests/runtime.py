@@ -152,7 +152,7 @@ def compose_test(package):
         env={**os.environ,"COMPOSE_PROJECT_NAME":PREFIX}
         base=["docker","compose"]
         try:
-            config=json.loads(run(base+["config","--format","json"],cwd=root,env=env).stdout)
+            config=json.loads(run(base+["--profile","initialize","config","--format","json"],cwd=root,env=env).stdout)
             service=config["services"]["samba-webmin"]
             assert service["pull_policy"]=="never" and service["restart"]=="unless-stopped"
             assert all(p["host_ip"]=="127.0.0.1" for p in service["ports"])
