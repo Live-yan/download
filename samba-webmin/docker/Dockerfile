@@ -13,7 +13,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     libio-socket-ssl-perl libnet-ssleay-perl procps tini \
  && rm -rf /var/lib/apt/lists/* \
  && smbd -V | tee /tmp/samba-version \
- && grep -Ex 'Version 4[.]22[.]11(-Debian)?' /tmp/samba-version \
+ && grep -Fx 'Version 4.22.11-Debian-4.22.11+dfsg-0+deb13u1' /tmp/samba-version \
  && dpkg-query -W samba samba-common samba-common-bin samba-libs samba-vfs-modules smbclient \
  && rm -f /var/lib/samba/private/secrets.tdb /var/lib/samba/private/passdb.tdb \
  && test -x /usr/bin/smbcontrol
