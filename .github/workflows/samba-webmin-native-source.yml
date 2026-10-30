@@ -1,4 +1,4 @@
-name: Kylin ARM64 native build source gate
+name: Kylin ARM64 native RPM build gate
 on:
   push:
     branches: [build/samba-webmin-offline-20261030]
@@ -8,6 +8,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: samba-webmin-native-build
+  cancel-in-progress: false
 jobs:
   source:
     runs-on: ubuntu-24.04-arm
@@ -16,14 +19,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Inspect official candidate and record exact baseline
+      - name: Inspect pinned official Kylin build baseline
         env:
-          IMAGE: cr.kylinos.cn/kylin/kylin-server-init:v10sp3-2403
+          IMAGE: cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe
         run: |
           set -euo pipefail
-          mkdir -p evidence
-          echo "Source qualification only; NOT native install/systemd acceptance." > evidence/SCOPE.txt
-          docker manifest inspect "$IMAGE" > evidence/manifest.json
+          mkdir -p evidence native-evidence
+          echo "RPM build source and linkage only; NOT offline install/systemd VM acceptance." > evidence/SCOPE.txt
           docker pull --platform linux/arm64 "$IMAGE"
           test "$(docker image inspect "$IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/arm64
           docker image inspect "$IMAGE" --format '{{json .RepoDigests}}' > evidence/digests.json
@@ -31,16 +33,7 @@ jobs:
             cat /etc/os-release
             rpm -q glibc rpm systemd
             test -s /etc/pki/rpm-gpg/RPM-GPG-KEY-kylin
-            cat /etc/pki/rpm-gpg/RPM-GPG-KEY-kylin
-          ' > evidence/baseline.txt
-          cat evidence/baseline.txt
-      - name: Check official target repository metadata
-        run: |
-          set -euo pipefail
-          for repo in base updates; do
-            curl --fail --show-error --location --retry 2 --max-time 120               "https://update.cs2c.com.cn/NS/V10/V10SP3-2403/os/adv/lic/$repo/aarch64/repodata/repomd.xml"               -o "evidence/$repo-repomd.xml"
-            test -s "evidence/$repo-repomd.xml"
-          done
+          ' | tee evidence/baseline.txt
       - name: Verify official source signatures
         run: |
           set -euo pipefail
@@ -61,38 +54,21 @@ jobs:
           rm samba-4.22.11.tar
           curl -fSL --retry 3 https://github.com/webmin/webmin/releases/download/2.670/webmin-2.670.tar.gz -o webmin-2.670.tar.gz
           echo '617af07a890bea18a83dca5c9d7168de1ad4d5f3076d8a1df3475f123748dc21  webmin-2.670.tar.gz' | sha256sum -c -
-          tar -tzf webmin-2.670.tar.gz | grep -Ei '(^|/)([^/]*\.spec|makerpm[^/]*|setup\.pl|setup\.sh)
+          tar -tzf webmin-2.670.tar.gz | grep -Ei '(^|/)([^/]*\.spec|makerpm[^/]*|setup\.pl|setup\.sh)$' > ../native-evidence/webmin-packaging-paths.txt
+          cat ../native-evidence/webmin-packaging-paths.txt
+      - name: Build isolated native Samba RPM in official Kylin userspace
         run: |
           set -euo pipefail
-          mkdir -p native-evidence
           docker run --rm --platform linux/arm64 -v "$PWD:/work" -w /work \
             cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe \
             bash -ec 'bash samba-webmin/native/probe-prerequisites.sh && bash samba-webmin/native/build-samba.sh'
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: kylin-native-source-evidence
+          name: kylin-native-build-evidence
           path: |
             evidence/
             native-evidence/
             native-rpmbuild/RPMS/
-          if-no-files-found: error
-          retention-days: 7
- > ../native-evidence/webmin-packaging-paths.txt
-          cat ../native-evidence/webmin-packaging-paths.txt
-      - name: Build isolated native Samba RPM in official Kylin userspace
-        run: |
-          set -euo pipefail
-          mkdir -p native-evidence
-          docker run --rm --platform linux/arm64 -v "$PWD:/work" -w /work \
-            cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe \
-            bash samba-webmin/native/probe-prerequisites.sh
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: kylin-native-source-evidence
-          path: |
-            evidence/
-            native-evidence/
           if-no-files-found: error
           retention-days: 7
