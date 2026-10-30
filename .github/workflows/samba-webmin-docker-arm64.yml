@@ -1,4 +1,5 @@
 name: Samba Webmin Docker ARM64 build gate
+# ARM64 native runner gate; artifacts here are intermediate, never release assets.
 
 on:
   push:
