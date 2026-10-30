@@ -60,7 +60,7 @@ def update(path,values):
     lines=[l for l in p.read_text().splitlines() if l.split("=",1)[0] not in values]
     p.write_text("\n".join(lines+[f"{k}={v}" for k,v in values.items()])+"\n")
 update("/etc/webmin/miniserv.conf",dict(bind="0.0.0.0",port="10000",listen="10000",ipv6="0",ssl="0",ssl_enforce="0",no_ssl_warn="1",no_pam="1",passwd_file="/etc/shadow",passwd_uindex="0",passwd_pindex="1",passwd_cindex="2",passwd_mindex="4",passwd_blank="0",passwd_mode="0",trust_real_ip="0",logtrust="0"))
-update("/etc/webmin/config",dict(lang="zh_CN.UTF-8"))
+update("/etc/webmin/config",dict(lang="zh"))
 update("/etc/webmin/samba/config",dict(smb_conf="/etc/samba/smb.conf",samba_password_program="/usr/bin/smbpasswd",samba_status_program="/usr/bin/smbstatus",samba_server="/usr/sbin/smbd",pdbedit="/usr/bin/pdbedit",net="/usr/bin/net",restart_cmd="/usr/bin/smbcontrol -s /etc/samba/smb.conf all reload-config"))
 PY
 FROM debian:13-slim

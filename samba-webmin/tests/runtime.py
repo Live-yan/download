@@ -116,7 +116,7 @@ def offline_test():
         for v in volumes: run(["docker","volume","create",v])
         assert run(["docker","image","inspect",IMAGE,"--format","{{.Os}}/{{.Architecture}}"]).stdout.strip()=="linux/arm64"
         run(["docker","run","--rm","--network","none","--entrypoint","sh",IMAGE,"-ec",
-             'test "$(cat /usr/share/webmin/version)" = 2.670; smbd -V | grep -F 4.22.11; test ! -e /etc/.samba-webmin-initialized; test ! -e /etc/webmin/miniserv.pem; grep -Eq "^root:[!*]" /etc/shadow'])
+             'test "$(cat /usr/share/webmin/version)" = 2.670; smbd -V | grep -F 4.22.11; test ! -e /etc/.samba-webmin-initialized; test ! -e /etc/webmin/miniserv.pem; grep -qx "lang=zh" /etc/webmin/config; grep -Eq "^root:[!*]" /etc/shadow'])
         assert run(["docker","run","--rm","--network","none",*mounts,IMAGE],ok=False).returncode != 0
         run(["docker","run","--rm","-i","--network","none",*mounts,"--entrypoint","sh",IMAGE,"-ec",INIT],PASSWORD+"\n")
         def start():
