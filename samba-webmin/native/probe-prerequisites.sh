@@ -32,7 +32,7 @@ candidates=(gcc gcc-c++ make binutils rpm-build rpm-devel createrepo_c
  pkgconfig pkgconf-pkg-config gnutls-devel libacl-devel libattr-devel libcap-devel
  jansson-devel pam-devel popt-devel zlib-devel libarchive-devel libicu-devel
  libuuid-devel libblkid-devel readline-devel ncurses-devel systemd-devel
- krb5-devel openldap-devel lmdb-devel flex bison libxslt docbook-style-xsl
+ krb5-devel openldap-devel lmdb-devel dbus-devel libtirpc-devel flex bison libxslt docbook-style-xsl
  tar gzip xz curl patch perl-Digest-SHA perl-Encode-Detect perl-IO-Tty perl-Net-SSLeay)
 : >"$OUT/available.tsv"
 : >"$OUT/missing.txt"
@@ -47,7 +47,7 @@ required=(gcc gcc-c++ make binutils rpm-build createrepo_c python3 python3-devel
  perl perl-Parse-Yapp gnutls-devel libacl-devel libattr-devel libcap-devel
  jansson-devel pam-devel popt-devel zlib-devel libarchive-devel libicu-devel
  libuuid-devel libblkid-devel readline-devel ncurses-devel systemd-devel
- krb5-devel openldap-devel lmdb-devel flex bison tar gzip xz curl patch pkgconfig)
+ krb5-devel openldap-devel lmdb-devel dbus-devel libtirpc-devel flex bison tar gzip xz curl patch pkgconfig)
 "${DNF[@]}" -y install "${required[@]}"
 rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE} %{ARCH}\n' | sort >"$OUT/installed.tsv"
 gcc --version

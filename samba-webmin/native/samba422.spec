@@ -16,7 +16,7 @@ BuildRequires: gcc, gcc-c++, make, binutils, python3-devel >= 3.6, perl, perl-Pa
 BuildRequires: pkgconfig, gnutls-devel >= 3.6.13, libacl-devel, libattr-devel, libcap-devel
 BuildRequires: jansson-devel, pam-devel, popt-devel, zlib-devel, libarchive-devel, libicu-devel
 BuildRequires: libuuid-devel, libblkid-devel, readline-devel, ncurses-devel, systemd-devel
-BuildRequires: krb5-devel, openldap-devel, lmdb-devel, flex, bison
+BuildRequires: krb5-devel, openldap-devel, lmdb-devel, flex, bison, dbus-devel, libtirpc-devel
 Requires: systemd
 Requires: python3 >= 3.6
 %description
