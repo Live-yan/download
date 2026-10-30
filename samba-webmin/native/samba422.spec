@@ -32,8 +32,7 @@ No service is automatically enabled or started.
  --with-statedir=%{sstate}/state --with-cachedir=%{sstate}/cache \
  --with-piddir=/run/samba422 \
  --bundled-libraries=talloc,tdb,tevent,ldb --private-libraries=ALL \
- --without-ad-dc --without-cluster-support --without-smb1-server \
- --with-system-mitkrb5
+ --without-ad-dc --without-cluster-support --without-smb1-server
 make %{?_smp_mflags}
 %install
 rm -rf %{buildroot}
