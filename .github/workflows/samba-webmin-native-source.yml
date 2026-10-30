@@ -61,7 +61,22 @@ jobs:
           set -euo pipefail
           docker run --rm --platform linux/arm64 -v "$PWD:/work" -w /work \
             cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe \
-            bash -ec 'bash samba-webmin/native/probe-prerequisites.sh && bash samba-webmin/native/build-webmin.sh && bash samba-webmin/native/build-samba.sh'
+            bash -ec 'bash samba-webmin/native/probe-prerequisites.sh && bash samba-webmin/native/build-webmin.sh && bash samba-webmin/native/build-samba.sh && bash samba-webmin/native/build-offline-bundles.sh'
+      - name: Verify each native bundle with no network and empty installroot
+        run: |
+          set -euo pipefail
+          for package in samba422 webmin; do
+            docker run --rm --network none --platform linux/arm64 -v "$PWD:/work" -w /work \
+              cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe \
+              bash samba-webmin/native/offline-closure.sh "$package"
+          done
+      - name: Preserve candidates for full VM acceptance, not release
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-offline-candidates-NOT-VM-VERIFIED
+          path: native-bundles/
+          if-no-files-found: error
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         if: always()
         with:
