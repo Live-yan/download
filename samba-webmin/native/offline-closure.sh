@@ -15,7 +15,12 @@ root=$(mktemp -d)
 repos=$(mktemp -d)
 trap 'rm -rf "$root" "$repos"' EXIT
 test -z "$(find "$root" -mindepth 1 -print -quit)"
-mkdir -p "$root/etc/pki/rpm-gpg"
+mkdir -p "$root/etc/pki/rpm-gpg" "$root/dev"
+# Minimal disposable chroot devices; no host device tree or privileged mode.
+mknod -m 0666 "$root/dev/null" c 1 3
+mknod -m 0666 "$root/dev/zero" c 1 5
+mknod -m 0666 "$root/dev/random" c 1 8
+mknod -m 0666 "$root/dev/urandom" c 1 9
 rpm --root "$root" --initdb
 packages=()
 repoflags=()
@@ -74,16 +79,20 @@ for name in "${names[@]}"; do
   for module in "${modules[@]}"; do
    chroot "$root" /usr/bin/perl -e 'my $m=shift; $m =~ s!::!/!g; require "$m.pm";' "$module"
   done
+  cat >"$root/usr/libexec/webmin/ci-date-fallback.pl" <<'PERL'
+chdir "/usr/libexec/webmin" or die "chdir";
+for my $m ("DateTime","DateTime::Locale","DateTime::TimeZone") {
+ die "Fallback test requires optional modules absent\n" if eval "require $m; 1";
+}
+require "./web-lib.pl"; &init_config();
+die "Date formatting fallback failed\n" unless &make_date(0,1,"yyyy-mm-dd") eq "1970-01-01";
+print "Optional DateTime absent: built-in date fallback passed\n";
+PERL
+  rc=0
   chroot "$root" /usr/bin/env TZ=UTC WEBMIN_CONFIG=/etc/webmin WEBMIN_VAR=/var/webmin \
-   /usr/bin/perl -I/usr/libexec/webmin -e '
-    for my $m ("DateTime","DateTime::Locale","DateTime::TimeZone") {
-     die "Fallback test requires optional modules absent\n" if eval "require $m; 1";
-    }
-    chdir "/usr/libexec/webmin" or die "chdir";
-    require "./web-lib.pl"; &init_config();
-    die "Date formatting fallback failed\n" unless &make_date(0,1,"yyyy-mm-dd") eq "1970-01-01";
-    print "Optional DateTime absent: built-in date fallback passed\n";
-   '
+   /usr/bin/perl -I/usr/libexec/webmin /usr/libexec/webmin/ci-date-fallback.pl || rc=$?
+  rm -f "$root/usr/libexec/webmin/ci-date-fallback.pl"
+  test "$rc" -eq 0
   grep -qx 'bind=127.0.0.1' "$root/etc/webmin/miniserv.conf"
   grep -qx 'ssl=0' "$root/etc/webmin/miniserv.conf"
   test ! -e "$root/etc/webmin/miniserv.pem"

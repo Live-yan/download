@@ -163,6 +163,130 @@ def login(password):
     return result
 
 
+def webmin_share_permissions_test(cookie):
+    def param(name):
+        return text("share-security-read-" + name.replace(" ", "-"), sb(
+            "testparm", "-s", "--section-name=share",
+            "--parameter-name=" + name, CONF
+        ))
+
+    def users(value):
+        # Webmin may serialize the same list using commas.
+        return tuple(x for x in re.split(r"[\s,]+", value.strip()) if x)
+
+    valid_before = users(param("valid users"))
+    guest_before = param("guest ok").lower()
+    check(valid_before == ("fileshare", "persistuser"),
+          "permission-test-exact-fixture-users")
+    check(guest_before == "no", "permission-test-guest-disabled")
+    check(param("read only").lower() == "no",
+          "permission-test-initially-writable")
+
+    # save_sec.cgi rewrites these fields, so refuse an unexpected fixture
+    # rather than deleting future access restrictions accidentally.
+    for field in ("invalid users", "read list", "write list",
+                  "hosts allow", "hosts deny"):
+        check(not param(field).strip(),
+              "permission-test-empty-fixture-" + field.replace(" ", "-"))
+
+    def unchanged_access():
+        check(users(param("valid users")) == valid_before,
+              "webmin-permission-preserves-valid-users")
+        check(param("guest ok").lower() == guest_before,
+              "webmin-permission-preserves-guest-denial")
+
+    def set_read_only(enabled):
+        fields = {
+            "old_name": "share",
+            "printer": "",
+            "writeable": "no" if enabled else "yes",
+            "guest": "0",
+            "valid_users_u": "fileshare persistuser",
+            "valid_users_g": "",
+            "invalid_users_u": "",
+            "invalid_users_g": "",
+            "user_u": "",
+            "user_g": "",
+            "read_list_u": "",
+            "read_list_g": "",
+            "write_list_u": "",
+            "write_list_g": "",
+            "allow_hosts_def": "1",
+            "allow_hosts": "",
+            "deny_hosts_def": "1",
+            "deny_hosts": "",
+            "guest_account": "",
+            "only_user": "",
+            "revalidate": "",
+        }
+        status, headers, body = request(
+            "POST", "/samba/save_sec.cgi", fields, cookie
+        )
+        check(status in (200, 302, 303),
+              "webmin-permission-save-response")
+        check(param("read only").lower() == ("yes" if enabled else "no"),
+              "webmin-permission-effective-config")
+        unchanged_access()
+
+        status, headers, body = request(
+            "GET", "/samba/restart.cgi", cookie=cookie
+        )
+        check(status in (200, 302, 303),
+              "webmin-permission-apply-response")
+        check(active("samba422"), "webmin-permission-service-alive")
+
+    source = PRIVATE / "permission-input"
+    source.write_bytes(b"webmin-permission-roundtrip\n")
+    remote = "webmin-permission-probe.txt"
+    check(not (SHARE / remote).exists(), "permission-probe-initially-absent")
+
+    # Establish that this exact account/path can write before changing policy.
+    smb("permission-baseline-write", "put %s %s" % (source, remote))
+    check((SHARE / remote).read_bytes() == source.read_bytes(),
+          "permission-baseline-real-write")
+    smb("permission-baseline-delete", "del " + remote)
+
+    original_failure_stage = None
+    try:
+        set_read_only(True)
+
+        # Each smbclient call uses a fresh session/tree connection.
+        smb("permission-readonly-authenticated-list", "ls")
+        result = smb(
+            "permission-readonly-write-attempt",
+            "put %s %s" % (source, remote),
+            good=False
+        )
+        check(result.returncode != 0 and
+              "NT_STATUS_ACCESS_DENIED" in result.stdout,
+              "webmin-readonly-denies-real-smb-write")
+        check(not (SHARE / remote).exists(),
+              "webmin-readonly-created-no-file")
+        unchanged_access()
+    except BaseException:
+        original_failure_stage = STAGE
+        raise
+    finally:
+        # Restore only through Webmin. Successful cleanup must not erase the
+        # diagnostic stage of the original exception. Cleanup failure takes
+        # precedence because the share may still be read-only.
+        try:
+            set_read_only(False)
+        except BaseException:
+            mark("webmin-permission-restore-failed")
+            raise
+        if original_failure_stage is not None:
+            mark(original_failure_stage)
+
+    smb("permission-restored-write", "put %s %s" % (source, remote))
+    check((SHARE / remote).read_bytes() == source.read_bytes(),
+          "webmin-restored-real-smb-write")
+    smb("permission-restored-delete", "del " + remote)
+    check(not (SHARE / remote).exists(),
+          "webmin-restored-real-smb-delete")
+    unchanged_access()
+
+
 def webmin_test(mutate=False):
     for unused in range(90):
         try:
@@ -235,6 +359,7 @@ def webmin_test(mutate=False):
         check(status in (200, 302, 303), "webmin-account-create-response")
         status, headers, body = request("GET", "/samba/restart.cgi", cookie=cookie)
         check(status in (200, 302, 303), "webmin-apply-response")
+        webmin_share_permissions_test(cookie)
 
     comment = text("webmin-share-real-result", sb(
         "testparm", "-s", "--section-name=share",
