@@ -679,6 +679,8 @@ def selinux_diagnostics(when):
         "/usr/lib/systemd/systemd-sysusers",
         "/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/chpasswd",
         "/usr/bin/passwd", "/usr/bin/python3", "/usr/bin/perl",
+        "/usr/bin/dnf", "/usr/bin/dnf-3", "/usr/bin/rpm", "/usr/bin/rpmkeys",
+        "/var/log", "/var/log/webmin",
         "/usr/local/libexec/native-acceptance.py",
         "/usr/libexec/webmin/miniserv.pl",
         "/etc", "/etc/passwd", "/etc/group", "/etc/shadow",
