@@ -90,7 +90,14 @@ jobs:
         run: |
           set -euo pipefail
           current=$(gh api "repos/$GH_REPO/git/ref/heads/build/samba-webmin-offline-20261030" --jq .object.sha)
-          test "$current" = "$GITHUB_SHA" || { echo "Branch advanced; do not publish superseded build"; exit 1; }
+          if [ "$current" != "$GITHUB_SHA" ]; then
+            gh api "repos/$GH_REPO/compare/$GITHUB_SHA...$current" > changes.json
+            jq -e '(.status == "ahead" or .status == "identical") and ((.files | length) < 300)' changes.json >/dev/null
+            if jq -r '.files[] | .filename, (.previous_filename // empty)' changes.json | grep -Eq '^(samba-webmin/(docker|tests)/|[.]github/workflows/samba-webmin-docker-arm64[.]yml$)'; then
+              echo "Docker delivery inputs changed after this tested commit; do not publish"
+              exit 1
+            fi
+          fi
           tag="samba-webmin-docker-arm64-$(printf '%s' "$GITHUB_SHA" | cut -c1-12)-$GITHUB_RUN_ID"
           asset=dist/samba-webmin-arm64-docker-offline.tar.gz
           cat > notes.md <<EOF
