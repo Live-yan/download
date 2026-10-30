@@ -1,25 +1,40 @@
+name: samba-webmin
+x-image: &image local/samba-webmin:4.22.11-webmin-2.670-arm64
+x-volumes: &volumes
+  - system_config:/etc
+  - samba_state:/var/lib/samba
+  - samba_share:/srv/samba/share
+  - webmin_var:/var/webmin
 services:
-  samba-webmin:
-    image: local/samba-webmin:4.22.11-webmin-2.670-arm64
-    container_name: samba-webmin
-    restart: unless-stopped
-    ports:
-      - "${SMB_BIND_IP}:445:445"
-      - "127.0.0.1:10000:10000"
-    volumes:
-      - samba_config:/etc/samba
-      - samba_private:/var/lib/samba/private
-      - samba_state:/var/lib/samba
-      - samba_share:/srv/samba/share
-      - webmin_config:/etc/webmin
+  initialize:
+    image: *image
+    platform: linux/arm64
+    pull_policy: never
+    profiles: [initialize]
+    network_mode: none
+    stdin_open: true
+    tty: true
+    command: [initialize]
+    restart: "no"
     healthcheck:
-      test: ["CMD-SHELL", "testparm -s >/dev/null && curl -fsS http://127.0.0.1:10000/ >/dev/null"]
-      interval: 30s
-      timeout: 8s
-      retries: 3
+      disable: true
+    volumes: *volumes
+  samba-webmin:
+    image: *image
+    platform: linux/arm64
+    pull_policy: never
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      WEBMIN_HOST: "${WEBMIN_HOST:?请填写Nginx外部域名}"
+      WEBMIN_PUBLIC_SCHEME: "${WEBMIN_PUBLIC_SCHEME:-https}"
+      WEBMIN_PUBLIC_PORT: "${WEBMIN_PUBLIC_PORT:-443}"
+    ports:
+      - "${SMB_BIND_IP:?请填写内网IP}:445:445/tcp"
+      - "127.0.0.1:10000:10000/tcp"
+    volumes: *volumes
 volumes:
-  samba_config:
-  samba_private:
+  system_config:
   samba_state:
   samba_share:
-  webmin_config:
+  webmin_var:
