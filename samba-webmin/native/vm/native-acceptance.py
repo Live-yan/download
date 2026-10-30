@@ -584,6 +584,177 @@ def write_state(value):
         os.close(directory)
 
 
+
+def selinux_diagnostics(when):
+    """Read-only metadata only: never print account files, argv or journal."""
+    import ctypes
+    import errno
+    import stat
+
+    def emit(kind, value):
+        print("SELINUX_DIAG " + json.dumps(
+            {"when": when, "kind": kind, "value": value}, sort_keys=True
+        ), flush=True)
+
+    def query(argv):
+        try:
+            p = subprocess.run(
+                argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                encoding="utf-8", errors="replace", timeout=20
+            )
+            return {"rc": p.returncode, "stdout": p.stdout.strip()[:12000]}
+        except Exception as exc:
+            return {"error_type": type(exc).__name__}
+
+    def read_context(path):
+        try:
+            return Path(path).read_text().strip().rstrip("\0")
+        except Exception as exc:
+            return {"error_type": type(exc).__name__,
+                    "errno": getattr(exc, "errno", None)}
+
+    current = read_context("/proc/self/attr/current")
+    pid1 = read_context("/proc/1/attr/current")
+    emit("process-contexts", {"current": current, "pid1": pid1})
+    emit("policy-packages", query([
+        "rpm", "-q", "selinux-policy", "selinux-policy-targeted",
+        "libselinux", "policycoreutils", "systemd", "shadow", "shadow-utils",
+        "rpm-plugin-selinux"
+    ]))
+    emit("kernel-policy-format", read_context("/sys/fs/selinux/policyvers"))
+    emit("service-security-properties", query([
+        "systemctl", "show", "native-acceptance.service",
+        "systemd-sysusers.service", "-p", "SELinuxContext",
+        "-p", "NoNewPrivileges", "-p", "FragmentPath"
+    ]))
+    try:
+        status = Path("/proc/self/status").read_text().splitlines()
+        emit("process-nnp-seccomp", [
+            line for line in status
+            if line.startswith(("NoNewPrivs:", "Seccomp:"))
+        ])
+    except Exception as exc:
+        emit("process-nnp-seccomp", {"error_type": type(exc).__name__})
+    try:
+        root_mount = [
+            line for line in Path("/proc/self/mountinfo").read_text().splitlines()
+            if len(line.split()) > 5 and line.split()[4] == "/"
+        ]
+        emit("root-mount", root_mount)
+    except Exception as exc:
+        emit("root-mount", {"error_type": type(exc).__name__})
+
+    context_base = Path("/etc/selinux/targeted/contexts/files/file_contexts")
+    for path in sorted(Path("/etc/selinux/targeted/policy").glob("policy.*")):
+        try:
+            emit("policy-file", {"path": str(path), "sha256": file_sha(path)})
+        except Exception as exc:
+            emit("policy-file", {"path": str(path), "error_type": type(exc).__name__})
+    for suffix in ["", ".bin", ".local", ".homedirs", ".subs", ".subs_dist"]:
+        path = Path(str(context_base) + suffix)
+        if path.is_file():
+            emit("context-file", {"path": str(path), "sha256": file_sha(path)})
+
+    lib = None
+    try:
+        lib = ctypes.CDLL("libselinux.so.1", use_errno=True)
+        lib.string_to_security_class.argtypes = [ctypes.c_char_p]
+        lib.string_to_security_class.restype = ctypes.c_ushort
+        lib.security_compute_create_raw.argtypes = [
+            ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ushort,
+            ctypes.POINTER(ctypes.c_void_p)
+        ]
+        lib.security_compute_create_raw.restype = ctypes.c_int
+        lib.freecon.argtypes = [ctypes.c_void_p]
+        lib.freecon.restype = None
+        process_class = lib.string_to_security_class(b"process")
+        if not process_class:
+            raise RuntimeError("unknown-process-class")
+    except Exception as exc:
+        emit("libselinux-query-init", {"error_type": type(exc).__name__})
+        lib = None
+
+    paths = [
+        "/usr/lib/systemd/systemd", "/usr/bin/systemd-sysusers",
+        "/usr/lib/systemd/systemd-sysusers",
+        "/usr/sbin/groupadd", "/usr/sbin/useradd", "/usr/sbin/chpasswd",
+        "/usr/bin/passwd", "/usr/bin/python3", "/usr/bin/perl",
+        "/usr/local/libexec/native-acceptance.py",
+        "/usr/libexec/webmin/miniserv.pl",
+        "/etc", "/etc/passwd", "/etc/group", "/etc/shadow",
+        "/etc/gshadow", "/etc/.pwd.lock"
+    ]
+    context_re = re.compile(r"[A-Za-z0-9_:.,-]+")
+    for original in paths:
+        path = Path(original)
+        row = {"path": original, "realpath": os.path.realpath(original)}
+        if not path.exists() and not path.is_symlink():
+            row["missing"] = True
+            emit("path-context", row)
+            continue
+        try:
+            info = path.lstat()
+            kind = "lnk_file" if stat.S_ISLNK(info.st_mode) else (
+                "dir" if stat.S_ISDIR(info.st_mode) else "file"
+            )
+            actual = os.getxattr(
+                original, "security.selinux", follow_symlinks=False
+            ).rstrip(b"\0").decode("ascii")
+            row["actual"] = actual
+            row["kind"] = kind
+            row["mode"] = oct(stat.S_IMODE(info.st_mode))
+            row["expected-default"] = query(
+                ["matchpathcon", "-N", "-n", "-m", kind, original]
+            )
+            row["expected-explicit"] = query([
+                "matchpathcon", "-N", "-n", "-f", str(context_base),
+                "-m", kind, original
+            ])
+            row["owner-package"] = query(["rpm", "-qf", original])
+            emit("path-context", row)
+            if not lib or kind == "dir":
+                continue
+            # Executions follow symlinks: query the resolved executable label.
+            resolved = row["realpath"]
+            exec_context = os.getxattr(resolved, "security.selinux").rstrip(b"\0").decode("ascii")
+            expected_query = query([
+                "matchpathcon", "-N", "-n", "-m", "file", resolved
+            ])
+            contexts = {"actual-executable": exec_context}
+            expected = expected_query.get("stdout", "")
+            if expected_query.get("rc") == 0 and context_re.fullmatch(expected):
+                contexts["expected-executable"] = expected
+            for source_name, source in [("current", current), ("pid1", pid1)]:
+                if not isinstance(source, str) or not context_re.fullmatch(source):
+                    continue
+                for label_kind, target in contexts.items():
+                    destination = ctypes.c_void_p()
+                    ctypes.set_errno(0)
+                    rc = lib.security_compute_create_raw(
+                        source.encode(), target.encode(), process_class,
+                        ctypes.byref(destination)
+                    )
+                    result = {
+                        "path": resolved, "source_name": source_name,
+                        "source": source, "executable_label_kind": label_kind,
+                        "executable_label": target, "rc": rc
+                    }
+                    if rc == 0 and destination.value:
+                        result["default_process_context"] = ctypes.string_at(
+                            destination.value
+                        ).decode("ascii")
+                    else:
+                        result["errno"] = ctypes.get_errno()
+                    if destination.value:
+                        lib.freecon(destination)
+                    emit("computed-default-transition", result)
+        except Exception as exc:
+            emit("path-diagnostic-error", {
+                "path": original, "error_type": type(exc).__name__,
+                "errno": getattr(exc, "errno", None)
+            })
+
+
 def main():
     global CASE, SAMBA, WEBMIN, BUNDLES, UNITS, PASSWORD
     check(sys.getfilesystemencoding().lower().replace("_", "-") == "utf-8",
@@ -614,6 +785,10 @@ def main():
           "no-guest-network-interface")
     check(not Path("/.dockerenv").exists(), "not-container-execution")
     boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    try:
+        selinux_diagnostics("baseline-before-application-install")
+    except Exception as exc:
+        print("SELINUX_DIAG diagnostic_error_type=" + type(exc).__name__, flush=True)
 
     if phase == 1:
         check(not PRIVATE.exists(), "pristine-private-test-state")
@@ -716,6 +891,10 @@ try:
 except Exception:
     # Fixed labels only: omit exception text, traceback, argv and captured output.
     print("NATIVE_FAIL case=%s stage=%s" % (CASE, STAGE), flush=True)
+    try:
+        selinux_diagnostics("failure")
+    except Exception as exc:
+        print("SELINUX_DIAG diagnostic_error_type=" + type(exc).__name__, flush=True)
     try:
         subprocess.run(
             ["systemctl", "--no-block", "poweroff"],

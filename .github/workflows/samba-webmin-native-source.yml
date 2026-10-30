@@ -6,7 +6,6 @@ on:
       - .github/workflows/samba-webmin-native-source.yml
       - samba-webmin/native/*
       - samba-webmin/native/offline/**
-      - samba-webmin/native/vm/**
   workflow_dispatch:
 permissions:
   contents: read
