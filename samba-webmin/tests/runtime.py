@@ -47,6 +47,7 @@ AUTH = r'''
 import http.client,re,sys,urllib.parse
 password=sys.stdin.readline().strip()
 from pathlib import Path
+import subprocess
 def request(method,path,data=None,cookie=None):
  c=http.client.HTTPConnection("127.0.0.1",10000,timeout=20)
  headers={"Host":"localhost","Referer":"https://localhost/"}
@@ -68,11 +69,15 @@ assert sids and any("secure" in x.lower() for x in cookies),"No authenticated se
 cookie="sid="+sids[-1]
 status,_,body=request("GET","/samba/",cookie=cookie)
 assert status==200 and not re.search(r'name=["\x27]?pass(?:["\x27 >])',body),"Protected Samba page unavailable"
-status,_,body=request("POST","/samba/save_fshare.cgi",{
- "old_name":"share","share":"share","homes":"0","path":"/srv/samba/share",
- "available":"yes","browseable":"yes","comment":"CI-Webmin-marker"
-},cookie)
-assert status in (200,302,303),"Webmin share update failed"
+if Path("/etc/.ci-webmin-user-created").exists():
+ actual=subprocess.run(["testparm","-s","--section-name=share","--parameter-name=comment","/etc/samba/smb.conf"],check=True,capture_output=True,text=True).stdout.strip()
+ assert actual=="CI-Webmin-marker","Webmin share configuration was not retained"
+else:
+ status,_,body=request("POST","/samba/save_fshare.cgi",{
+  "old_name":"share","share":"share","homes":"0","path":"/srv/samba/share",
+  "available":"yes","browseable":"yes","comment":"CI-Webmin-marker"
+ },cookie)
+ assert status in (200,302,303),"Webmin share update failed"
 if not Path("/etc/.ci-webmin-user-created").exists():
  status,_,body=request("POST","/samba/make_epass.cgi",{"who":"0","include_list":"persistuser","add":"1","newmode":"2","newpass":password},cookie)
  assert status in (200,302,303),"Webmin account creation failed"
