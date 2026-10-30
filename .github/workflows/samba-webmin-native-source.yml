@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/samba-webmin-native-source.yml
       - samba-webmin/native/*
+      - samba-webmin/native/offline/**
   workflow_dispatch:
 permissions:
   contents: read
@@ -65,7 +66,7 @@ jobs:
       - name: Verify each native bundle with no network and empty installroot
         run: |
           set -euo pipefail
-          for package in samba422 webmin; do
+          for package in samba422 webmin combined; do
             docker run --rm --network none --platform linux/arm64 -v "$PWD:/work" -w /work \
               cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe \
               bash samba-webmin/native/offline-closure.sh "$package"

@@ -79,6 +79,12 @@ baseurl=file:///opt/offline/$name/application
 enabled=1
 gpgcheck=0
 EOF
+ cp "/work/samba-webmin/native/offline/README-$name.md" "$bundle/README.md"
+ case "$name" in
+  samba422) cp /work/samba-webmin/native/offline/samba422-manage.sh "$bundle/samba-manage.sh";;
+  webmin) cp /work/samba-webmin/native/offline/webmin-manage.sh "$bundle/webmin-manage.sh";;
+ esac
+ chmod 0755 "$bundle/"*-manage.sh
  rm -rf "$work"
 }
 make_bundle samba422 "$(cat /work/native-evidence/samba-rpm-path.txt)"

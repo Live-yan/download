@@ -18,7 +18,8 @@ Requires: /usr/bin/perl
 Requires: perl(lib), perl(open), perl(FindBin), perl(Socket), perl(Data::Dumper)
 Requires: perl(File::Path), perl(File::Basename), perl(Digest::SHA), perl(Digest::MD5)
 Requires: perl(Time::Local), perl(Time::HiRes), perl(Time::Piece), perl(Net::SSLeay)
-Requires: perl(DateTime), perl(DateTime::Locale), perl(DateTime::TimeZone)
+# Optional upstream date-localization enhancement; core has a tested fallback.
+Recommends: perl(DateTime), perl(DateTime::Locale), perl(DateTime::TimeZone)
 Requires: perl(Encode::Detect), perl(Socket6), perl(Sys::Syslog), perl(JSON::XS)
 Requires: coreutils, findutils, grep, sed, procps-ng, shadow-utils, systemd
 Requires: openssl, tar, gzip, unzip, shared-mime-info
