@@ -37,6 +37,22 @@ def command(argv, data=None):
     p = subprocess.run(["chroot", str(ROOT)] + argv, input=data,
                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
     evidence.append("EXIT " + str(p.returncode))
+    if p.returncode != 0 and Path(argv[0]).name == "chpasswd":
+        message = (p.stdout + p.stderr).lower()
+        for label, pattern in (
+            ("password_quality_rejection", b"bad password"),
+            ("password_classes", b"classes"),
+            ("password_complexity", b"complex"),
+            ("password_too_short", b"short"),
+            ("password_too_long", b"long"),
+            ("pam_token_error", b"authentication token"),
+            ("pam_module_load", b"module"),
+            ("permission_denied", b"permission denied"),
+            ("password_lock", b"lock"),
+            ("missing_file", b"no such file"),
+            ("system_error", b"system error"),
+        ):
+            if pattern in message: evidence.append("CHPASSWD_DIAG " + label)
     require(p.returncode == 0, "initialization_command_failed")
 def main():
     require(os.geteuid() == 0, "host_not_root")
@@ -83,12 +99,17 @@ def main():
                     problems.append("conflicting_hook"); continue
                 found[fn] = argv
     # Snapshot actual PAM include chain before making assumptions about it.
-    pam = {}; queue = ["login"]
+    pam = {}; queue = ["login", "chpasswd"]
     while queue:
         name = queue.pop(0)
         require(re.fullmatch(r"[A-Za-z0-9_.-]+", name) is not None, "pam_include_name")
         if name in pam: continue
         require(len(pam) < 32, "pam_include_limit")
+        if name == "chpasswd" and not rooted("/etc/pam.d/chpasswd").exists():
+            evidence.append("PAM_SERVICE chpasswd has no dedicated file")
+            pam[name] = ""
+            if rooted("/etc/pam.d/other").exists(): queue.append("other")
+            continue
         content = read("/etc/pam.d/" + name)
         pam[name] = content
         evidence.append("PAM_FILE /etc/pam.d/" + name)
@@ -123,6 +144,17 @@ def main():
     require(re.search(r"(?m)^-?session\s+.*pam_selinux\.so\s+.*\bclose\b", active_pam) is not None, "pam_selinux_close_missing")
     if re.search(r"\bpam_securetty\.so\b", active_pam):
         require("ttyAMA0" in entries, "securetty_ttyama0_not_explicit")
+    qualities = [rooted("/etc/security/pwquality.conf")]
+    quality_dir = rooted("/etc/security/pwquality.conf.d")
+    if quality_dir.is_dir():
+        qualities += sorted(quality_dir.glob("*.conf"))
+    for quality in qualities:
+        if not quality.is_file() or quality.is_symlink(): continue
+        allowed_options = {"minlen","minclass","maxrepeat","maxclassrepeat","dcredit","ucredit","lcredit","ocredit","difok","enforce_for_root"}
+        for row in quality.read_text().splitlines():
+            clean = row.split("#",1)[0].strip()
+            key = clean.split("=",1)[0].strip()
+            if key in allowed_options: evidence.append("PWQUALITY " + str(quality.relative_to(ROOT)) + " " + clean)
     dev = rooted("/dev")
     dev.mkdir(exist_ok=True)
     for name, minor in (("null", 3), ("zero", 5), ("random", 8), ("urandom", 9)):
@@ -143,7 +175,7 @@ def main():
     require(stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600 and st.st_uid == int(os.environ["HOST_UID"]),
             "secret_file_metadata")
     secret = SECRET.read_bytes().strip()
-    require(re.fullmatch(b"[0-9a-f]{64}", secret) is not None, "secret_format")
+    require(re.fullmatch(b"Aa9![0-9a-f]{60}", secret) is not None, "secret_format")
     # Pass only on stdin; never print captured chpasswd output.
     chpasswd = next((p for p in ("/usr/sbin/chpasswd", "/sbin/chpasswd") if rooted(p).is_file()), None)
     require(chpasswd is not None, "chpasswd_missing")

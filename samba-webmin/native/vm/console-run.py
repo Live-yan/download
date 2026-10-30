@@ -27,7 +27,7 @@ def main():
         require(stat.S_ISREG(st.st_mode) and stat.S_IMODE(st.st_mode) == 0o600
                 and st.st_uid == os.geteuid(), "secret_metadata")
         secret = p.read_bytes().strip()
-        require(re.fullmatch(b"[0-9a-f]{64}", secret) is not None, "secret_format")
+        require(re.fullmatch(b"Aa9![0-9a-f]{60}", secret) is not None, "secret_format")
         require(re.fullmatch(r"[a-zA-Z0-9-]+", a.run) is not None, "run_format")
         cmd = a.command
         if cmd and cmd[0] == "--": cmd = cmd[1:]

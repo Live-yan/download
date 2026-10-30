@@ -17,7 +17,7 @@ python3 - "$work/login-secret" <<'PY'
 import os,secrets,sys
 fd=os.open(sys.argv[1],os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
 with os.fdopen(fd,"w") as stream:
- stream.write(secrets.token_hex(32)+"\n")
+ stream.write("Aa9!"+secrets.token_hex(30)+"\n")
 PY
 cid=""
 cleanup() {

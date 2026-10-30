@@ -767,7 +767,7 @@ def read_console_fixture_password():
           "private-console-secret-root-owned-regular-file")
     check(stat.S_IMODE(info.st_mode) == 0o600, "private-console-secret-mode")
     value = path.read_text(encoding="ascii").rstrip("\n")
-    check(re.fullmatch(r"[0-9a-f]{64}", value) is not None,
+    check(re.fullmatch(r"Aa9![0-9a-f]{60}", value) is not None,
           "private-console-secret-format")
     return value
 
