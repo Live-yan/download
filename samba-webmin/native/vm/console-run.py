@@ -118,7 +118,7 @@ def main():
             passed = False; reason = "sanitized_log_write_failed"
     # Publish only structured, already-redacted guest evidence to job logs.
     for line in text.decode("utf-8", errors="replace").splitlines():
-        if "avc:  denied" in line or re.match(r"^(?:CI_ROOT_LOGIN_READY |LOGIN_CONTEXT[ =:]|SELINUX_DIAG[ =:]|BASELINE_UNIT[ =:]|SERVICE_CONTEXT[ =:]|CANDIDATE[ =:]|NATIVE_(?:PASS|FAIL)[ =:])", line):
+        if "avc:  denied" in line or re.match(r"^(?:CI_ROOT_LOGIN_READY |LOGIN_CONTEXT[ =:]|SELINUX_DIAG[ =:]|COMMAND_FAILURE[ =:]|SMB_DIAG[ =:]|BASELINE_UNIT[ =:]|SERVICE_CONTEXT[ =:]|CANDIDATE[ =:]|NATIVE_(?:PASS|FAIL)[ =:])", line):
             print(line)
     print("CONSOLE_" + ("PASS" if passed else "FAIL") + " stage=" + stage + " reason=" + reason)
     return 0 if passed else 1

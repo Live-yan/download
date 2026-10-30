@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import stat
 import subprocess
 import sys
@@ -26,6 +27,7 @@ SAMBA = False
 WEBMIN = False
 BUNDLES = []
 UNITS = []
+SAMBA_SOCKET_READY = False
 
 os.umask(0o077)
 os.environ["PATH"] = PREFIX + "/bin:" + PREFIX + "/sbin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -51,6 +53,12 @@ def run(label, argv, data=None, good=True, timeout=180):
     )
     # Do not expose command arguments, output, passwords or HTTP bodies.
     if good and result.returncode:
+        try:
+            command_failure_metadata(result)
+            if argv and argv[0] == PREFIX + "/bin/smbclient":
+                samba_failure_metadata()
+        except Exception:
+            print("SMB_DIAG unavailable=true", flush=True)
         raise RuntimeError(label)
     return result
 
@@ -65,6 +73,131 @@ def text(label, argv):
     if result.returncode:
         raise RuntimeError(label)
     return result.stdout.strip()
+
+
+def command_failure_metadata(result):
+    """Only fixed vocabulary leaves the process; never raw output or argv."""
+    output = result.stdout or ""
+    statuses = (
+        "NT_STATUS_ACCESS_DENIED", "NT_STATUS_LOGON_FAILURE",
+        "NT_STATUS_WRONG_PASSWORD", "NT_STATUS_ACCOUNT_DISABLED",
+        "NT_STATUS_ACCOUNT_RESTRICTION", "NT_STATUS_NO_SUCH_USER",
+        "NT_STATUS_BAD_NETWORK_NAME", "NT_STATUS_BAD_NETWORK_PATH",
+        "NT_STATUS_CONNECTION_REFUSED", "NT_STATUS_CONNECTION_DISCONNECTED",
+        "NT_STATUS_CONNECTION_RESET", "NT_STATUS_IO_TIMEOUT",
+        "NT_STATUS_NETWORK_UNREACHABLE", "NT_STATUS_HOST_UNREACHABLE",
+        "NT_STATUS_OBJECT_NAME_NOT_FOUND", "NT_STATUS_OBJECT_PATH_NOT_FOUND",
+        "NT_STATUS_OBJECT_NAME_INVALID", "NT_STATUS_INVALID_PARAMETER",
+        "NT_STATUS_NOT_SUPPORTED", "NT_STATUS_UNSUCCESSFUL",
+        "NT_STATUS_INTERNAL_ERROR", "NT_STATUS_DLL_NOT_FOUND",
+    )
+    observed = set(re.findall(r"\bNT_STATUS_[A-Z0-9_]+\b", output))
+    lower = output.lower()
+    categories = {
+        "session_setup": "session setup failed" in lower,
+        "tree_connect": "tree connect failed" in lower,
+        "connection": "connection failed" in lower,
+        "connection_refused": "connection refused" in lower,
+        "loader": "error while loading shared libraries" in lower,
+        "missing_symbol": "undefined symbol" in lower,
+        "charset": "conversion error" in lower or "invalid multibyte" in lower,
+        "local_open": "error opening local file" in lower,
+        "authfile": "error opening authentication file" in lower,
+    }
+    print("COMMAND_FAILURE " + json.dumps({
+        "rc": result.returncode,
+        "nt_status": [name for name in statuses if name in observed],
+        "other_nt_status_present": bool(observed - set(statuses)),
+        "categories": sorted(name for name, hit in categories.items() if hit),
+    }, sort_keys=True), flush=True)
+
+
+def samba_failure_metadata():
+    def query(argv):
+        return subprocess.run(
+            argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            encoding="utf-8", errors="replace", timeout=20
+        )
+
+    sockets = query(["ss", "-H", "-ltn"])
+    endpoints = []
+    for line in sockets.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[3].endswith(":445"):
+            endpoint = fields[3]
+            endpoints.append(
+                endpoint if endpoint in (
+                    "0.0.0.0:445", "127.0.0.1:445",
+                    "[::]:445", "[::1]:445", "*:445"
+                ) else "other-445"
+            )
+    service = query([
+        "systemctl", "show", "samba422",
+        "-p", "MainPID", "-p", "ActiveState",
+        "-p", "SubState", "-p", "Result", "-p", "NRestarts"
+    ])
+    properties = dict(
+        line.split("=", 1)
+        for line in service.stdout.splitlines() if "=" in line
+    )
+    pid = properties.get("MainPID", "")
+    record = {
+        "ss_rc": sockets.returncode,
+        "listeners445": sorted(endpoints),
+        "service_query_rc": service.returncode,
+        "active": properties.get("ActiveState") == "active",
+        "running": properties.get("SubState") == "running",
+        "result_success": properties.get("Result") == "success",
+        "pid": int(pid) if pid.isdigit() else None,
+        "restarts": (
+            int(properties["NRestarts"])
+            if properties.get("NRestarts", "").isdigit() else None
+        ),
+    }
+    if pid.isdigit() and int(pid) > 1:
+        try:
+            context = Path("/proc/" + pid + "/attr/current").read_text().strip()
+            if re.fullmatch(r"[A-Za-z0-9_:.,-]+", context):
+                record["service_context"] = context
+        except OSError:
+            record["service_context_unavailable"] = True
+    print("SMB_DIAG " + json.dumps(record, sort_keys=True), flush=True)
+
+
+def wait_samba_socket_once():
+    """One startup gate per boot; never retries an SMB operation or changes service state."""
+    global SAMBA_SOCKET_READY
+    if SAMBA_SOCKET_READY:
+        return
+    mark("samba-initial-socket-readiness")
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        try:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            status = subprocess.run(
+                ["systemctl", "is-active", "--quiet", "samba422"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=min(2, remaining)
+            )
+            remaining = deadline - time.monotonic()
+            if status.returncode == 0 and remaining > 0:
+                with socket.create_connection(
+                    ("127.0.0.1", 445), timeout=min(1, remaining)
+                ):
+                    SAMBA_SOCKET_READY = True
+                    return
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.5, remaining))
+    try:
+        samba_failure_metadata()
+    except Exception:
+        print("SMB_DIAG unavailable=true", flush=True)
+    check(False, "samba-initial-socket-readiness")
 
 
 def sha(data):
@@ -116,6 +249,7 @@ def authfile(account="fileshare", wrong=False):
 
 def smb(label, commands, account="fileshare", wrong=False, anonymous=False,
         good=True):
+    wait_samba_socket_once()
     args = sb("smbclient", "//127.0.0.1/share", "-s", CONF, "-m", "SMB3")
     args += ["-N"] if anonymous else ["-A", authfile(account, wrong)]
     args += ["-c", commands]
