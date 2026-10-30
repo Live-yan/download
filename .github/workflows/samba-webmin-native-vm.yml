@@ -1,0 +1,39 @@
+name: Kylin full VM boot qualification
+on:
+  push:
+    branches: [build/samba-webmin-offline-20261030]
+    paths:
+      - samba-webmin/native/vm/**
+      - .github/workflows/samba-webmin-native-vm.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  boot:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Install distribution QEMU tooling
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm
+      - name: Syntax checks
+        run: |
+          bash -n samba-webmin/native/vm/run-probe.sh
+          bash -n samba-webmin/native/vm/probe.sh
+          python3 -m py_compile samba-webmin/native/vm/label-image.py
+      - name: Build and boot official-component offline Kylin VM
+        run: bash samba-webmin/native/vm/run-probe.sh
+      - name: Preserve VM evidence, not a distributable application package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kylin-vm-boot-evidence
+          path: |
+            vm-work/serial.log
+            vm-work/rpm-manifest.txt
+            vm-work/labels/*.log
+            vm-work/labels/skipped.txt
+          if-no-files-found: warn
+          retention-days: 7

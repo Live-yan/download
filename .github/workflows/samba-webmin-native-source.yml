@@ -4,7 +4,7 @@ on:
     branches: [build/samba-webmin-offline-20261030]
     paths:
       - .github/workflows/samba-webmin-native-source.yml
-      - samba-webmin/native/**
+      - samba-webmin/native/*
   workflow_dispatch:
 permissions:
   contents: read

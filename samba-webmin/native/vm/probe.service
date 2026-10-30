@@ -1,0 +1,11 @@
+[Unit]
+Description=Official-component Kylin full VM boot qualification
+After=local-fs.target systemd-udev-trigger.service
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash /usr/local/sbin/kylin-vm-probe
+StandardOutput=journal+console
+StandardError=journal+console
+TimeoutStartSec=120
+[Install]
+WantedBy=multi-user.target

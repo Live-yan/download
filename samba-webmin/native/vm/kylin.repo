@@ -1,0 +1,14 @@
+[ci-base]
+name=Official Kylin V10 SP3 2403 base
+baseurl=https://update.cs2c.com.cn/NS/V10/V10SP3-2403/os/adv/lic/base/aarch64/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-kylin
+sslverify=1
+[ci-updates]
+name=Official Kylin V10 SP3 2403 updates
+baseurl=https://update.cs2c.com.cn/NS/V10/V10SP3-2403/os/adv/lic/updates/aarch64/
+enabled=0
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-kylin
+sslverify=1
