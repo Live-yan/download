@@ -1,0 +1,25 @@
+services:
+  samba-webmin:
+    image: local/samba-webmin:4.22.11-webmin-2.670-arm64
+    container_name: samba-webmin
+    restart: unless-stopped
+    ports:
+      - "${SMB_BIND_IP}:445:445"
+      - "127.0.0.1:10000:10000"
+    volumes:
+      - samba_config:/etc/samba
+      - samba_private:/var/lib/samba/private
+      - samba_state:/var/lib/samba
+      - samba_share:/srv/samba/share
+      - webmin_config:/etc/webmin
+    healthcheck:
+      test: ["CMD-SHELL", "testparm -s >/dev/null && curl -fsS http://127.0.0.1:10000/ >/dev/null"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+volumes:
+  samba_config:
+  samba_private:
+  samba_state:
+  samba_share:
+  webmin_config:
