@@ -11,7 +11,7 @@ permissions:
 jobs:
   source:
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 40
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +41,46 @@ jobs:
             curl --fail --show-error --location --retry 2 --max-time 120               "https://update.cs2c.com.cn/NS/V10/V10SP3-2403/os/adv/lic/$repo/aarch64/repodata/repomd.xml"               -o "evidence/$repo-repomd.xml"
             test -s "evidence/$repo-repomd.xml"
           done
-      - name: Probe official Kylin toolchain prerequisites
+      - name: Verify official source signatures
+        run: |
+          set -euo pipefail
+          mkdir -p sources native-evidence
+          cd sources
+          curl -fSL --retry 3 https://download.samba.org/pub/samba/stable/samba-4.22.11.tar.gz -o samba-4.22.11.tar.gz
+          curl -fSL --retry 3 https://download.samba.org/pub/samba/stable/samba-4.22.11.tar.asc -o samba-4.22.11.tar.asc
+          curl -fSL --retry 3 https://download.samba.org/pub/samba/samba-pubkey.asc -o samba-pubkey.asc
+          export GNUPGHOME
+          GNUPGHOME=$(mktemp -d)
+          chmod 700 "$GNUPGHOME"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          gpg --batch --import samba-pubkey.asc
+          gzip -dc samba-4.22.11.tar.gz > samba-4.22.11.tar
+          gpg --batch --status-fd=1 --verify samba-4.22.11.tar.asc samba-4.22.11.tar > ../native-evidence/samba-signature.txt
+          grep -q '^\[GNUPG:\] VALIDSIG ' ../native-evidence/samba-signature.txt
+          if grep -Eq '^\[GNUPG:\] (BADSIG|ERRSIG|REVKEYSIG|EXPKEYSIG|EXPSIG) ' ../native-evidence/samba-signature.txt; then exit 1; fi
+          rm samba-4.22.11.tar
+          curl -fSL --retry 3 https://github.com/webmin/webmin/releases/download/2.670/webmin-2.670.tar.gz -o webmin-2.670.tar.gz
+          echo '617af07a890bea18a83dca5c9d7168de1ad4d5f3076d8a1df3475f123748dc21  webmin-2.670.tar.gz' | sha256sum -c -
+          tar -tzf webmin-2.670.tar.gz | grep -Ei '(^|/)([^/]*\.spec|makerpm[^/]*|setup\.pl|setup\.sh)
+        run: |
+          set -euo pipefail
+          mkdir -p native-evidence
+          docker run --rm --platform linux/arm64 -v "$PWD:/work" -w /work \
+            cr.kylinos.cn/kylin/kylin-server-init@sha256:cd3739897bbf4d08348e9250b6fdfcc96dde1dbee04700e299a6bcd9617977fe \
+            bash -ec 'bash samba-webmin/native/probe-prerequisites.sh && bash samba-webmin/native/build-samba.sh'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kylin-native-source-evidence
+          path: |
+            evidence/
+            native-evidence/
+            native-rpmbuild/RPMS/
+          if-no-files-found: error
+          retention-days: 7
+ > ../native-evidence/webmin-packaging-paths.txt
+          cat ../native-evidence/webmin-packaging-paths.txt
+      - name: Build isolated native Samba RPM in official Kylin userspace
         run: |
           set -euo pipefail
           mkdir -p native-evidence

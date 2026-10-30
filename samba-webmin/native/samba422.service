@@ -1,0 +1,15 @@
+[Unit]
+Description=Isolated Samba 4.22.11 file server
+After=network.target
+[Service]
+Type=simple
+RuntimeDirectory=samba422
+RuntimeDirectoryMode=0755
+ExecStartPre=/opt/samba-4.22.11/bin/testparm -s /etc/samba-4.22.11/smb.conf
+ExecStart=/opt/samba-4.22.11/sbin/smbd --foreground --no-process-group --configfile=/etc/samba-4.22.11/smb.conf
+ExecReload=/bin/kill -HUP $MAINPID
+KillMode=mixed
+Restart=on-failure
+RestartSec=5s
+[Install]
+WantedBy=multi-user.target
