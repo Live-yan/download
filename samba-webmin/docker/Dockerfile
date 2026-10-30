@@ -5,7 +5,7 @@ ARG WEBMIN_VERSION=2.670
 RUN apt-get update && apt-get install -y --no-install-recommends \
     acl attr ca-certificates curl gcc g++ make pkg-config python3 python3-dev \
     python3-dnspython python3-cryptography python3-markdown python3-requests \
-    python3-setproctitle python3-ldb python3-tdb python3-talloc python3-tevent \
+    python3-setproctitle python3-ldb python3-tdb python3-talloc \
     libacl1-dev libarchive-dev libattr1-dev libavahi-client-dev libblkid-dev \
     libbsd-dev libcups2-dev libcap-dev libgnutls28-dev libgpgme-dev \
     libicu-dev libjansson-dev libldap2-dev libldb-dev liblmdb-dev libncurses-dev \
