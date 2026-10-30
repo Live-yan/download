@@ -18,7 +18,7 @@ WORKDIR /tmp/build
 RUN curl -fsSLO https://download.samba.org/pub/samba/stable/samba-${SAMBA_VERSION}.tar.gz \
  && tar -xzf samba-${SAMBA_VERSION}.tar.gz \
  && cd samba-${SAMBA_VERSION} \
- && ./configure --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
+ && ./configure --enable-fhs --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
       --with-privatedir=/var/lib/samba/private --with-lockdir=/run/samba \
       --with-statedir=/var/lib/samba --without-ad-dc \
  && make -j"$(nproc)" && make install DESTDIR=/stage \
