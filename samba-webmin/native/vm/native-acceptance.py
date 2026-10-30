@@ -56,7 +56,15 @@ def run(label, argv, data=None, good=True, timeout=180):
 
 
 def text(label, argv):
-    return run(label, argv).stdout.strip()
+    # Values and diagnostics are separate streams; exact-value assertions stay strict.
+    mark(label)
+    result = subprocess.run(
+        argv, encoding="utf-8", errors="replace",
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180
+    )
+    if result.returncode:
+        raise RuntimeError(label)
+    return result.stdout.strip()
 
 
 def sha(data):
@@ -332,6 +340,9 @@ def webmin_test(mutate=False):
         if len(fields) >= 4 and fields[3].endswith(":10000"):
             endpoints.append(fields[3])
     check(endpoints == ["127.0.0.1:10000"], "webmin-listens-only-on-loopback")
+
+    for directory in ("/var/webmin/locks", "/var/webmin/modules"):
+        check(Path(directory).is_dir(), "webmin-runtime-directory-created-" + Path(directory).name)
 
     if not SAMBA:
         return

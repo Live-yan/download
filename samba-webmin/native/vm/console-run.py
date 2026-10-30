@@ -75,6 +75,7 @@ def main():
         marker = ("NATIVE_PASS case=" + a.case + " phase=" + a.phase + " run=" + a.run).encode()
         require(marker in text.splitlines(), "pass_marker_missing")
         require(b"NATIVE_FAIL" not in text, "guest_failure_marker")
+        require(re.search(rb"avc:\s+denied", text) is None, "selinux_denial_observed")
         require(b"Power down" in text or b"Powerdown" in text, "powerdown_missing")
         passed = True; reason = "ok"
     except GateError as exc:
@@ -117,7 +118,7 @@ def main():
             passed = False; reason = "sanitized_log_write_failed"
     # Publish only structured, already-redacted guest evidence to job logs.
     for line in text.decode("utf-8", errors="replace").splitlines():
-        if "avc:  denied" in line or re.match(r"^(?:CI_ROOT_LOGIN_READY |LOGIN_CONTEXT[ =:]|SELINUX_DIAG[ =:]|BASELINE_UNIT[ =:]|NATIVE_(?:PASS|FAIL)[ =:])", line):
+        if "avc:  denied" in line or re.match(r"^(?:CI_ROOT_LOGIN_READY |LOGIN_CONTEXT[ =:]|SELINUX_DIAG[ =:]|BASELINE_UNIT[ =:]|SERVICE_CONTEXT[ =:]|CANDIDATE[ =:]|NATIVE_(?:PASS|FAIL)[ =:])", line):
             print(line)
     print("CONSOLE_" + ("PASS" if passed else "FAIL") + " stage=" + stage + " reason=" + reason)
     return 0 if passed else 1

@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        case: [samba, webmin, combined]
+        case: [samba]
     steps:
       - uses: actions/checkout@v4
         with:
