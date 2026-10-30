@@ -5,7 +5,7 @@ work=pathlib.Path("/work/labels")
 work.mkdir()
 contexts="/etc/selinux/targeted/contexts/files/file_contexts"
 def run(args):
- return subprocess.check_output(args,universal_newlines=True).strip()
+ return subprocess.check_output(args,universal_newlines=True,stderr=subprocess.PIPE).strip()
 def quote(path):
  if any(c in path for c in ['"',"\\","\n","\r","\x00"]):
   raise RuntimeError("Unsupported debugfs pathname: "+repr(path))

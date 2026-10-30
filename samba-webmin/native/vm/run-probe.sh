@@ -9,7 +9,7 @@ trap 'docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
 docker export "$cid" > vm-work/rootfs.tar
 docker rm "$cid"
 trap - EXIT
-docker run --rm --network none -v "$PWD/vm-work:/work" --entrypoint /bin/bash kylin-vm-probe -euxo pipefail -c '
+docker run --rm --network none -e HOST_UID="$(id -u)" -e HOST_GID="$(id -g)" -v "$PWD/vm-work:/work" --entrypoint /bin/bash kylin-vm-probe -euxo pipefail -c '
  mkdir /work/rootfs
  tar --numeric-owner -xpf /work/rootfs.tar -C /work/rootfs
  rm -f /work/rootfs/.dockerenv /work/rootfs/run/.containerenv
@@ -21,6 +21,7 @@ docker run --rm --network none -v "$PWD/vm-work:/work" --entrypoint /bin/bash ky
  cp /boot/ci-initramfs.img /work/initramfs.img
  cp /boot/vmlinuz-$(cat /etc/ci-expected-kernel) /work/vmlinuz
  cp /etc/ci-rpm-manifest /work/rpm-manifest.txt
+ chown "$HOST_UID:$HOST_GID" /work/root.ext4 /work/initramfs.img /work/vmlinuz /work/rpm-manifest.txt
 '
 python3 - <<'PY'
 import gzip
