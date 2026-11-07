@@ -1,0 +1,101 @@
+name: Download GNS3 3.1 Hyper-V VM to Baidu Netdisk
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gns3-3-1-hyperv-to-baidu
+  cancel-in-progress: false
+
+jobs:
+  transfer:
+    name: Download and upload GNS3 VM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      GNS3_TAG: v3.1.0a7
+      GNS3_FILE: GNS3.VM.Hyper-V.3.1.0a7.zip
+      BAIDU_REMOTE_DIR: /GNS3
+      BAIDUPCS_GO_CONFIG_DIR: ${{ runner.temp }}/baidupcs-go
+
+    steps:
+      - name: Verify Baidu credentials are configured
+        shell: bash
+        env:
+          BAIDU_BDUSS: ${{ secrets.BAIDU_BDUSS }}
+          BAIDU_STOKEN: ${{ secrets.BAIDU_STOKEN }}
+        run: |
+          if [[ -z "$BAIDU_BDUSS" || -z "$BAIDU_STOKEN" ]]; then
+            echo "::error::Please add BAIDU_BDUSS and BAIDU_STOKEN in Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
+      - name: Download official GNS3 Hyper-V VM release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p download
+          gh release download "$GNS3_TAG" \
+            --repo GNS3/gns3-gui \
+            --pattern "$GNS3_FILE" \
+            --dir download \
+            --clobber
+
+          # Expected asset size from the official GNS3 v3.1.0a7 GitHub release.
+          expected_bytes=1029086207
+          actual_bytes=$(stat -c '%s' "download/$GNS3_FILE")
+          echo "Downloaded: $GNS3_FILE ($actual_bytes bytes)"
+          if [[ "$actual_bytes" -ne "$expected_bytes" ]]; then
+            echo "::error::Size mismatch: expected $expected_bytes bytes, received $actual_bytes."
+            exit 1
+          fi
+          (cd download && sha256sum "$GNS3_FILE" > "$GNS3_FILE.sha256")
+
+      - name: Install verified BaiduPCS-Go v4.0.2
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fL --retry 5 --retry-delay 5 \
+            -o "$RUNNER_TEMP/BaiduPCS-Go.zip" \
+            'https://github.com/qjfoidnh/BaiduPCS-Go/releases/download/v4.0.2/BaiduPCS-Go-v4.0.2-linux-amd64.zip'
+          echo 'b5f51388b510433668ca22fa5a1cb8840fb4d9725c5edc830554645010a62339  '"$RUNNER_TEMP/BaiduPCS-Go.zip" | sha256sum --check --status
+          mkdir -p "$RUNNER_TEMP/baidupcs-extracted"
+          unzip -q "$RUNNER_TEMP/BaiduPCS-Go.zip" -d "$RUNNER_TEMP/baidupcs-extracted"
+          binary=$(find "$RUNNER_TEMP/baidupcs-extracted" -type f -name 'BaiduPCS-Go' -print -quit)
+          test -n "$binary"
+          install -m 755 "$binary" "$RUNNER_TEMP/BaiduPCS-Go"
+          mkdir -p "$BAIDUPCS_GO_CONFIG_DIR"
+          chmod 700 "$BAIDUPCS_GO_CONFIG_DIR"
+
+      - name: Log in and upload to Baidu Netdisk
+        shell: bash
+        env:
+          BAIDU_BDUSS: ${{ secrets.BAIDU_BDUSS }}
+          BAIDU_STOKEN: ${{ secrets.BAIDU_STOKEN }}
+        run: |
+          set -euo pipefail
+          cli="$RUNNER_TEMP/BaiduPCS-Go"
+          # Suppress login output because cookies are equivalent to account credentials.
+          if ! "$cli" login -bduss="$BAIDU_BDUSS" -stoken="$BAIDU_STOKEN" \
+              > "$RUNNER_TEMP/baidu-login.log" 2>&1; then
+            echo '::error::Baidu login failed. Check BDUSS/STOKEN validity and account verification requirements.'
+            exit 1
+          fi
+          if ! "$cli" ls "$BAIDU_REMOTE_DIR" > /dev/null 2>&1; then
+            "$cli" mkdir "$BAIDU_REMOTE_DIR"
+          fi
+          "$cli" upload "download/$GNS3_FILE" "$BAIDU_REMOTE_DIR" --policy overwrite
+          "$cli" upload "download/$GNS3_FILE.sha256" "$BAIDU_REMOTE_DIR" --policy overwrite
+          echo "Upload commands completed. Checking Baidu Netdisk directory $BAIDU_REMOTE_DIR."
+          "$cli" ls "$BAIDU_REMOTE_DIR"
+
+      - name: Clean up sensitive temporary configuration
+        if: always()
+        shell: bash
+        run: |
+          rm -rf "$BAIDUPCS_GO_CONFIG_DIR" "$RUNNER_TEMP/baidu-login.log"
