@@ -2,6 +2,10 @@ name: Download GNS3 3.1 Hyper-V VM to Baidu Netdisk
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gns3-to-baidu.yml'
 
 permissions:
   contents: read
@@ -88,8 +92,16 @@ jobs:
             echo '::error::Baidu login failed. Check BDUSS/STOKEN validity and account verification requirements.'
             exit 1
           fi
-          if ! "$cli" ls "$BAIDU_REMOTE_DIR" > /dev/null 2>&1; then
-            "$cli" mkdir "$BAIDU_REMOTE_DIR"
+          # BaiduPCS-Go may exit 0 even when 'ls' reports code -9 (not found).
+          # Always attempt to create the directory, then verify the actual output.
+          echo "Ensuring Baidu Netdisk directory exists: $BAIDU_REMOTE_DIR"
+          "$cli" mkdir "$BAIDU_REMOTE_DIR" > "$RUNNER_TEMP/baidu-mkdir.log" 2>&1 || true
+          "$cli" ls "$BAIDU_REMOTE_DIR" > "$RUNNER_TEMP/baidu-dir-check.log" 2>&1 || true
+          if grep -Eq '代码: -9|消息: 文件不存在|code: -9' "$RUNNER_TEMP/baidu-dir-check.log"; then
+            echo '::error::Baidu Netdisk destination folder is missing or inaccessible after mkdir. Check the account and folder permissions.'
+            cat "$RUNNER_TEMP/baidu-mkdir.log"
+            cat "$RUNNER_TEMP/baidu-dir-check.log"
+            exit 1
           fi
           "$cli" upload "download/$GNS3_FILE" "$BAIDU_REMOTE_DIR" --policy overwrite
           "$cli" upload "download/$GNS3_FILE.sha256" "$BAIDU_REMOTE_DIR" --policy overwrite
@@ -102,4 +114,4 @@ jobs:
         env:
           BAIDUPCS_GO_CONFIG_DIR: ${{ runner.temp }}/baidupcs-go
         run: |
-          rm -rf "$BAIDUPCS_GO_CONFIG_DIR" "$RUNNER_TEMP/baidu-login.log"
+          rm -rf "$BAIDUPCS_GO_CONFIG_DIR" "$RUNNER_TEMP/baidu-login.log" "$RUNNER_TEMP/baidu-mkdir.log" "$RUNNER_TEMP/baidu-dir-check.log"
