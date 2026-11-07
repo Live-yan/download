@@ -2,10 +2,6 @@ name: Download GNS3 3.1 Hyper-V VM to Baidu Netdisk
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - '.github/workflows/gns3-to-baidu.yml'
 
 permissions:
   contents: read
